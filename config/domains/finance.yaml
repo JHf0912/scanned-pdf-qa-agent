@@ -1,0 +1,27 @@
+# 业务场景：金融材料（年报、招股书、审计报告、产品说明书）
+#
+# 场景特征与迁移要点：
+#   - 表格密集且往往是**跨页长表**，表头需重复；数值有单位与口径（万元/亿元/%）
+#   - 同一个指标在不同年份/不同章节出现多次，**冲突候选是常态**而非异常，
+#     因此歧义检测（AMBIGUOUS_QUESTION）在本场景最有价值
+#   - 数值幻觉代价最高，数值落地校验必须作为门，且高风险字段建议转人工复核
+description: 金融材料（表格密集、跨页长表、数值口径敏感、同指标多处出现）
+clause_patterns:
+  - '^\s*(?P<label>第[一二三四五六七八九十百]+[节章部分])\s*(?P<title>\S.*)$'
+  - '^\s*(?P<label>\d+(?:\.\d+){0,3})\s+(?P<title>\S.*)$'
+  - '^\s*(?P<label>[（(][一二三四五六七八九十]+[）)])\s*(?P<title>\S.*)$'
+table_cues: [表, 单位, 万元, 亿元, 同比, 占比, 金额, 余额, 合计, 本期, 上期]
+citation_template: "[p.{page} §{clause}]"
+chunk:
+  # 金融表格大，chunk 放宽；但**表格仍必须原子化**，绝不跨 chunk 切断
+  max_chars: 1000
+  overlap_chars: 120
+retrieve:
+  top_k: 8
+  arm_weights: {bm25_word: 1.0, bm25_char: 0.6}
+  table_boost: 1.6
+qa:
+  # 保守阈值：金融数值给错比拒答严重得多
+  min_coverage: 0.55
+  min_top_score: 0.0
+  support_score_gate: null

@@ -1,0 +1,56 @@
+{
+  "blocks": [
+    {
+      "type": "clause",
+      "order": 0,
+      "clause_label": "4",
+      "text": "4  验收规则"
+    },
+    {
+      "type": "paragraph",
+      "order": 1,
+      "clause_label": null,
+      "text": "示例件的检验项目与合格质量水平见表 1。"
+    },
+    {
+      "type": "table",
+      "order": 2,
+      "clause_label": "表 1",
+      "text": "",
+      "table": {
+        "caption": "表 1  检验项目与合格质量水平 AQL",
+        "html": "<table>\n<thead>\n<tr><th rowspan=\"2\">检验项目</th><th colspan=\"3\">合格质量水平 AQL</th></tr>\n<tr><th>甲型</th><th>乙型</th><th>丙型</th></tr>\n</thead>\n<tbody>\n<tr><td>外径</td><td>1.0</td><td>1.0</td><td>1.5</td></tr>\n<tr><td>壁厚</td><td>2.5</td><td>2.5</td><td>2.5</td></tr>\n<tr><td>长度</td><td>4</td><td>—</td><td>4</td></tr>\n<tr><td>密封等级</td><td>—</td><td>2.5</td><td>—</td></tr>\n</tbody></table>"
+      }
+    },
+    {
+      "type": "clause",
+      "order": 3,
+      "clause_label": "4.1",
+      "text": "4.1  按 Q/EXAMPLE 200—2024 的规定进行抽样检验。"
+    },
+    {
+      "type": "clause",
+      "order": 4,
+      "clause_label": "4.2",
+      "text": "4.2  样本量 n 为 8，合格判定数为 Ac。"
+    },
+    {
+      "type": "clause",
+      "order": 5,
+      "clause_label": "5",
+      "text": "5  标志与包装"
+    },
+    {
+      "type": "clause",
+      "order": 6,
+      "clause_label": "5.1",
+      "text": "5.1  包装箱外表面应标明制造厂名、产品名称与出厂日期。"
+    },
+    {
+      "type": "clause",
+      "order": 7,
+      "clause_label": "5.2",
+      "text": "5.2  产品应涂防锈剂，自出厂之日起一年内不生锈。"
+    }
+  ]
+}

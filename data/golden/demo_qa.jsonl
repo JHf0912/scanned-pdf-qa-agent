@@ -1,0 +1,37 @@
+// 合成演示件的金标问答集。
+//
+// **与 gb_qa.jsonl 的区别，用之前必须知道**：
+// 这份的输入是 `artifacts/demo/` 里那份**自造**的合成文档，
+// 它的"识别结果"由 tools/make_demo_artifact.py 从同一份源文本程序化生成，
+// 因此**零 OCR 误差是构造出来的，不是识别出来的**。
+//
+// 所以这份金标只用来验证**管线连通性**（切分/检索/问答/自检/拒答/报告整条链路），
+// **不得据此声明任何 OCR 精度指标**。
+//
+// category：clause / table / no_answer / negation / ocr_stress
+//
+// **未配置生成模型时的预期结果**
+// ------------------------------
+// 本仓库默认没有生成模型，答案由证据原文抽取拼装（见 src/docqa/llm/null.py）。
+// 这个模式下有两类题**注定拿不到分**，且原因不是管线缺陷：
+//
+//   - T1：抽取式会把整张表原样贴出，于是 `must_not_contain: ["1.5"]` 必然命中。
+//         配了生成模型后，答案会只说 "1.0"，这条就会通过。
+//   - G1：抽取式**没有能力合成"未规定"这种否定结论**——它只能搬运证据。
+//         而"未规定"恰恰需要生成侧来判断并组织语言。
+//
+// 跑出这两条失败是**符合预期的**，应当如实呈现在报告里，而不是把它们从金标里删掉。
+// 删掉等于把"无模型时能力受限"这个事实藏起来。
+{"qid":"D1","question":"示例件的额定载荷要求是多少？","category":"clause","expected_answer":"应大于等于 12.5 kN。","must_contain":["12.5","kN"],"citation_pages":[1],"notes":"3.1 条"}
+{"qid":"D2","question":"示例件的工作温度范围是多少？","category":"clause","expected_answer":"-20 ℃ ~ 60 ℃。","must_contain":["-20","60"],"citation_pages":[1],"notes":"3.3 条"}
+{"qid":"D3","question":"示例件的密封等级要求是什么？","category":"clause","expected_answer":"应不低于 IP54。","must_contain":["IP54"],"citation_pages":[1],"notes":"3.4 条"}
+{"qid":"D4","question":"公称直径大于 8 mm 时壁厚如何取值？","category":"clause","expected_answer":"d ≤ 20 mm 取 2.0 mm；d > 20 mm 取 3.0 mm。","must_contain":["2.0","3.0"],"citation_pages":[1],"notes":"3.5 条，分级取值"}
+{"qid":"D5","question":"本文件的适用范围是什么？","category":"clause","expected_answer":"适用于示例件的设计、制造与验收。","must_contain":["设计","制造","验收"],"citation_pages":[1],"notes":"第 1 章"}
+{"qid":"T1","question":"表 1 中乙型的外径 AQL 是多少？","category":"table","expected_answer":"1.0","must_contain":["1.0"],"must_not_contain":["1.5"],"citation_pages":[2],"notes":"★表格题。按 (行=外径, 列=乙型) 定位；1.5 是丙型的值，答成 1.5 即为串列"}
+{"qid":"T2","question":"表 1 中乙型的壁厚 AQL 是多少？","category":"table","expected_answer":"2.5","must_contain":["2.5"],"citation_pages":[2],"notes":"★表格题"}
+{"qid":"T3","question":"表 1 中丙型的长度 AQL 是多少？","category":"table","expected_answer":"4","must_contain":["4"],"citation_pages":[2],"notes":"★表格题。乙型该格是「—」（不适用），与 4 不可混淆"}
+{"qid":"T4","question":"表 1 中甲型的密封等级 AQL 是多少？","category":"table","expected_answer":"—（不适用）","must_contain":["—"],"citation_pages":[2],"notes":"★表格题。考「—」不等于 0、也不等于漏识别"}
+{"qid":"N1","question":"示例件的整机重量是多少？","category":"no_answer","expected_answer":"","expected_refusal":true,"expected_reason":"not_in_document","notes":"★无答案题。文档只规定载荷、温度、密封与壁厚，未涉及重量"}
+{"qid":"N2","question":"示例件的质保期是多久？","category":"no_answer","expected_answer":"","expected_refusal":true,"expected_reason":"not_in_document","notes":"★无答案题。文档只提到防锈「一年内不生锈」，那不是质保期"}
+{"qid":"G1","question":"本文件是否规定了示例件的材料牌号？","category":"negation","expected_answer":"本文件未规定材料牌号。","must_contain":["未规定"],"must_not_contain":["Q235","45 钢"],"citation_pages":[1],"notes":"★否定题。正确答案是「未规定」，不是拒答"}
+{"qid":"O1","question":"本文件引用了哪些规范性文件？","category":"ocr_stress","expected_answer":"Q/EXAMPLE 100—2025 与 Q/EXAMPLE 200—2024。","must_contain":["100","200"],"citation_pages":[1],"notes":"OCR 压力题。文号含破折号与年份，是最容易读错的形态"}

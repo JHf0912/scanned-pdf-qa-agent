@@ -1,0 +1,22 @@
+[
+  {
+    "page_no": 1,
+    "file": "p0001_native.png",
+    "sha256": "dbac49ea454b5c81",
+    "width": 1240,
+    "height": 1754,
+    "dpi": 150.0,
+    "native": true,
+    "upscale": 1.0
+  },
+  {
+    "page_no": 2,
+    "file": "p0002_native.png",
+    "sha256": "fbf2fbeca018f8d7",
+    "width": 1240,
+    "height": 1754,
+    "dpi": 150.0,
+    "native": true,
+    "upscale": 1.0
+  }
+]

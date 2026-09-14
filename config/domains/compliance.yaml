@@ -1,0 +1,25 @@
+# 业务场景：合规文档（监管规则、内控制度、审计底稿、合同条款）
+#
+# 场景特征与迁移要点：
+#   - **可追溯性是核心诉求**：每个结论必须能回溯到条款原文，审计要留痕
+#   - 文档可能被恶意构造（提示注入），检索到的文本必须始终当"数据"而非"指令"
+#   - 否定问句极常见（"是否规定了…"），"未规定"是有效答案，不是拒答
+description: 合规与制度文件（强调可追溯、留痕、抗提示注入）
+clause_patterns:
+  - '^\s*(?P<label>第[一二三四五六七八九十百千]+条)\s*(?P<title>\S.*)$'
+  - '^\s*(?P<label>\d+(?:\.\d+){0,4})\s+(?P<title>\S.*)$'
+  - '^\s*(?P<label>[（(][一二三四五六七八九十]+[）)])\s*(?P<title>\S.*)$'
+table_cues: [表, 清单, 矩阵, 职责, 权限, 限额, 期限]
+citation_template: "[p.{page} §{clause}]"
+chunk:
+  # 合规引用要精确到条款，chunk 偏小、重叠偏大，减少"引用了但引不全"
+  max_chars: 600
+  overlap_chars: 120
+retrieve:
+  top_k: 8
+  arm_weights: {bm25_word: 1.0, bm25_char: 0.9}
+  table_boost: 1.3
+qa:
+  min_coverage: 0.5
+  min_top_score: 0.0
+  support_score_gate: null

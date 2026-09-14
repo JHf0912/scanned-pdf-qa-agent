@@ -1,0 +1,119 @@
+{
+  "path": "data\\raw\\demo_scan.pdf",
+  "sha256": "4553671404f92a26ddeef31ef6f45c01083ddf93231ee3f87355e4b93e476739",
+  "page_count": 2,
+  "kind": "SCANNED",
+  "cross_engine": {
+    "pdftotext_available": 1.0,
+    "pdftotext_chars_total": 0.0,
+    "pymupdf_chars_total": 0.0
+  },
+  "pages": [
+    {
+      "page_no": 1,
+      "kind": "SCANNED",
+      "char_count": 0,
+      "font_resource_count": 0,
+      "drawn_image_count": 1,
+      "excluded_tiny_images": 0,
+      "drawn_image_area_ratio": 1.0,
+      "native_dpi": 150.0,
+      "reason": "无有效文本（0 字符）且图像覆盖 100%，且无任何字体资源",
+      "signals": [
+        {
+          "name": "pymupdf_chars",
+          "value": 0,
+          "threshold": 10,
+          "passed": false,
+          "detail": "PyMuPDF 抽出 0 个有效字符（阈值 10）",
+          "source": "pymupdf"
+        },
+        {
+          "name": "pdftotext_chars",
+          "value": 0,
+          "threshold": 10,
+          "passed": false,
+          "detail": "pdftotext 独立抽出 0 个有效字符",
+          "source": "pdftotext"
+        },
+        {
+          "name": "font_resources",
+          "value": 0,
+          "threshold": 1,
+          "passed": false,
+          "detail": "页面引用 0 个字体资源；0 表示文字只能是图像像素",
+          "source": "pymupdf"
+        },
+        {
+          "name": "drawn_image_area_ratio",
+          "value": 1.0,
+          "threshold": 0.5,
+          "passed": true,
+          "detail": "绘制图像占页面面积 100.0%（1 张有效图，已排除 0 张小于 1024px² 的干扰图）",
+          "source": "pymupdf.display_list"
+        },
+        {
+          "name": "garbled_text_layer",
+          "value": 0.0,
+          "threshold": 0.04,
+          "passed": true,
+          "detail": "粘连 token 占比 0.00%，替换字符占比 0.00%",
+          "source": "pymupdf"
+        }
+      ]
+    },
+    {
+      "page_no": 2,
+      "kind": "SCANNED",
+      "char_count": 0,
+      "font_resource_count": 0,
+      "drawn_image_count": 1,
+      "excluded_tiny_images": 0,
+      "drawn_image_area_ratio": 1.0,
+      "native_dpi": 150.0,
+      "reason": "无有效文本（0 字符）且图像覆盖 100%，且无任何字体资源",
+      "signals": [
+        {
+          "name": "pymupdf_chars",
+          "value": 0,
+          "threshold": 10,
+          "passed": false,
+          "detail": "PyMuPDF 抽出 0 个有效字符（阈值 10）",
+          "source": "pymupdf"
+        },
+        {
+          "name": "pdftotext_chars",
+          "value": 0,
+          "threshold": 10,
+          "passed": false,
+          "detail": "pdftotext 独立抽出 0 个有效字符",
+          "source": "pdftotext"
+        },
+        {
+          "name": "font_resources",
+          "value": 0,
+          "threshold": 1,
+          "passed": false,
+          "detail": "页面引用 0 个字体资源；0 表示文字只能是图像像素",
+          "source": "pymupdf"
+        },
+        {
+          "name": "drawn_image_area_ratio",
+          "value": 1.0,
+          "threshold": 0.5,
+          "passed": true,
+          "detail": "绘制图像占页面面积 100.0%（1 张有效图，已排除 0 张小于 1024px² 的干扰图）",
+          "source": "pymupdf.display_list"
+        },
+        {
+          "name": "garbled_text_layer",
+          "value": 0.0,
+          "threshold": 0.04,
+          "passed": true,
+          "detail": "粘连 token 占比 0.00%，替换字符占比 0.00%",
+          "source": "pymupdf"
+        }
+      ]
+    }
+  ]
+}

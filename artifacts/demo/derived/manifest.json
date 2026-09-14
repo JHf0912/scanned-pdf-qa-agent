@@ -1,0 +1,205 @@
+{
+  "doc_id": "demo_scan-45536714",
+  "source": {
+    "path": "data\\raw\\demo_scan.pdf",
+    "sha256": "4553671404f92a26ddeef31ef6f45c01083ddf93231ee3f87355e4b93e476739",
+    "page_count": 2
+  },
+  "domain": "standard",
+  "detect": {
+    "kind": "SCANNED",
+    "cross_engine": {
+      "pdftotext_available": 1.0,
+      "pdftotext_chars_total": 0.0,
+      "pymupdf_chars_total": 0.0
+    },
+    "pages": [
+      {
+        "page_no": 1,
+        "kind": "SCANNED",
+        "char_count": 0,
+        "font_resource_count": 0,
+        "drawn_image_count": 1,
+        "excluded_tiny_images": 0,
+        "drawn_image_area_ratio": 1.0,
+        "native_dpi": 150.0,
+        "reason": "无有效文本（0 字符）且图像覆盖 100%，且无任何字体资源",
+        "signals": [
+          {
+            "name": "pymupdf_chars",
+            "value": 0,
+            "threshold": 10,
+            "passed": false,
+            "detail": "PyMuPDF 抽出 0 个有效字符（阈值 10）",
+            "source": "pymupdf"
+          },
+          {
+            "name": "pdftotext_chars",
+            "value": 0,
+            "threshold": 10,
+            "passed": false,
+            "detail": "pdftotext 独立抽出 0 个有效字符",
+            "source": "pdftotext"
+          },
+          {
+            "name": "font_resources",
+            "value": 0,
+            "threshold": 1,
+            "passed": false,
+            "detail": "页面引用 0 个字体资源；0 表示文字只能是图像像素",
+            "source": "pymupdf"
+          },
+          {
+            "name": "drawn_image_area_ratio",
+            "value": 1.0,
+            "threshold": 0.5,
+            "passed": true,
+            "detail": "绘制图像占页面面积 100.0%（1 张有效图，已排除 0 张小于 1024px² 的干扰图）",
+            "source": "pymupdf.display_list"
+          },
+          {
+            "name": "garbled_text_layer",
+            "value": 0.0,
+            "threshold": 0.04,
+            "passed": true,
+            "detail": "粘连 token 占比 0.00%，替换字符占比 0.00%",
+            "source": "pymupdf"
+          }
+        ]
+      },
+      {
+        "page_no": 2,
+        "kind": "SCANNED",
+        "char_count": 0,
+        "font_resource_count": 0,
+        "drawn_image_count": 1,
+        "excluded_tiny_images": 0,
+        "drawn_image_area_ratio": 1.0,
+        "native_dpi": 150.0,
+        "reason": "无有效文本（0 字符）且图像覆盖 100%，且无任何字体资源",
+        "signals": [
+          {
+            "name": "pymupdf_chars",
+            "value": 0,
+            "threshold": 10,
+            "passed": false,
+            "detail": "PyMuPDF 抽出 0 个有效字符（阈值 10）",
+            "source": "pymupdf"
+          },
+          {
+            "name": "pdftotext_chars",
+            "value": 0,
+            "threshold": 10,
+            "passed": false,
+            "detail": "pdftotext 独立抽出 0 个有效字符",
+            "source": "pdftotext"
+          },
+          {
+            "name": "font_resources",
+            "value": 0,
+            "threshold": 1,
+            "passed": false,
+            "detail": "页面引用 0 个字体资源；0 表示文字只能是图像像素",
+            "source": "pymupdf"
+          },
+          {
+            "name": "drawn_image_area_ratio",
+            "value": 1.0,
+            "threshold": 0.5,
+            "passed": true,
+            "detail": "绘制图像占页面面积 100.0%（1 张有效图，已排除 0 张小于 1024px² 的干扰图）",
+            "source": "pymupdf.display_list"
+          },
+          {
+            "name": "garbled_text_layer",
+            "value": 0.0,
+            "threshold": 0.04,
+            "passed": true,
+            "detail": "粘连 token 占比 0.00%，替换字符占比 0.00%",
+            "source": "pymupdf"
+          }
+        ]
+      }
+    ]
+  },
+  "render": {
+    "mode": "auto",
+    "upscale": 1.0,
+    "images": [
+      {
+        "page_no": 1,
+        "file": "p0001_native.png",
+        "sha256": "dbac49ea454b5c81",
+        "width": 1240,
+        "height": 1754,
+        "dpi": 150.0,
+        "native": true,
+        "upscale": 1.0
+      },
+      {
+        "page_no": 2,
+        "file": "p0002_native.png",
+        "sha256": "fbf2fbeca018f8d7",
+        "width": 1240,
+        "height": 1754,
+        "dpi": 150.0,
+        "native": true,
+        "upscale": 1.0
+      }
+    ]
+  },
+  "ocr": {
+    "engine": "fixture",
+    "model": "fixture",
+    "pages_total": 2,
+    "pages_failed": [],
+    "warnings": {
+      "1": [
+        "本页由 fixture 引擎提供，非真实模型识别结果"
+      ],
+      "2": [
+        "本页由 fixture 引擎提供，非真实模型识别结果"
+      ]
+    }
+  },
+  "chunk": {
+    "doc_id": "demo_scan-45536714",
+    "chunks": 16,
+    "structured": true,
+    "used_sentence_fallback": false,
+    "tables": 1,
+    "avg_chars": 43.8,
+    "citation_mode": "clause"
+  },
+  "index": {
+    "chunks": 16,
+    "arms": [
+      {
+        "arm": "bm25_word",
+        "n_docs": 16,
+        "vocab": 126,
+        "avg_len": 14.9
+      },
+      {
+        "arm": "bm25_char",
+        "n_docs": 16,
+        "vocab": 259,
+        "avg_len": 27.1
+      }
+    ],
+    "weights": {
+      "bm25_word": 1.0,
+      "bm25_char": 0.7
+    },
+    "dense_available": false,
+    "table_chunks": 1
+  },
+  "usage_total": {
+    "tokens_in": 0,
+    "tokens_out": 0,
+    "est_cost_usd": 0.0,
+    "latency_ms": 0,
+    "pages": 2
+  },
+  "elapsed_s": 2.31
+}

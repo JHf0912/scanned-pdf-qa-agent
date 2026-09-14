@@ -1,0 +1,74 @@
+[project]
+name = "docqa"
+version = "0.1.0"
+description = "扫描版 PDF 智能文档问答 Agent —— 文档理解 + 检索问答 + 可靠性验证"
+readme = "README.md"
+# 钉 3.12：MinerU 在 Windows 上只支持 3.10–3.12（被 ray 卡在 3.13），
+# EasyOCR 也明确不推荐 3.12+。钉在这里 = 本地 OCR 备选路线全部保留。
+requires-python = ">=3.12,<3.13"
+
+dependencies = [
+    "pymupdf>=1.28.2",        # PDF 解析/渲染；AGPL-3.0，见 docs/scalability.md
+    "pillow>=11.0.0",         # 图像处理；含 WebP 解码（拼回官方预览页要用）
+    "httpx>=0.28.1",          # OpenAI 兼容端点的 HTTP 调用
+    "anthropic>=0.75.0",      # Anthropic Messages API 用官方 SDK，不手搓 HTTP
+    "typer>=0.27.0",          # CLI
+    "rich>=13.9.0",           # CLI 渲染
+    "pydantic>=2.10.0",       # 配置与数据模型校验
+    "pydantic-settings>=2.15.0",
+    "python-dotenv>=1.2.0",   # 只读 .env，密钥绝不入库
+    "pyyaml>=6.0.2",          # config/*.yaml
+    "jieba>=0.42.1",          # 中文分词（BM25 词元臂）
+    "rank-bm25>=0.2.2",       # 纯 Python BM25，无需模型
+    "fastapi>=0.141.0",       # Web UI
+    "uvicorn>=0.52.0",
+]
+
+[project.optional-dependencies]
+# 本地确定性表格引擎：与 VLM 做跨引擎交叉校验。
+# 单独分组，因为它不是主路径的硬依赖——装不上不影响 ingest/ask/eval 跑通。
+table = ["rapid-table>=3.0.2"]
+
+# OCR 精度评估。单独分组是因为它们是**评估**依赖而非运行依赖——
+# 没有它们仍能问答，只是跑不了 CER 指标（评估会明确标注该项缺失，不静默跳过）。
+eval = [
+    "jiwer>=3.1.0",           # CER/WER。注意必须配字符级变换，
+                              # 默认按空格切分对中文是错的（见 eval/ocr_metrics.py）
+    "zhconv>=1.4.3",          # 繁简归一：OCR 可能输出繁体变体，
+                              # 不归一会被算成替换错误，虚高 CER
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=8.3.0",
+    "pytest-cov>=6.0.0",
+]
+
+[project.scripts]
+# 必须绑到 `main` 而不是 `app`。
+#
+# Click/Typer 的 standalone 模式只捕获 ClickException / Abort / Exit，
+# **不捕获业务异常**。绑 `app` 的话，cli.py 里 `main()` 中的
+# `except DocqaError -> _fail()` 就是死代码：异常带着 traceback 冲出进程，
+# 退出码退化成固定的 1，精心写的"缺哪个变量、去哪配、有哪些替代路径"
+# 那套提示永远不会出现。
+# 测试用 `CliRunner` 直接调 `app`，与这里不冲突。
+docqa = "docqa.cli:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/docqa"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
+markers = [
+    "live: 需要真实模型密钥的测试（默认跳过）",
+]
+
+[tool.coverage.run]
+source = ["src/docqa"]
+omit = ["src/docqa/web/*"]

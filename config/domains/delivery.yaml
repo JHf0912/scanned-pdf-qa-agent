@@ -1,0 +1,24 @@
+# 业务场景：客户交付材料（产品手册、实施方案、验收文档、运维手册）
+#
+# 场景特征与迁移要点：
+#   - 图文混排，操作步骤常以列表/编号呈现；图注承载信息（前提条件、注意事项）
+#   - 交付物常需多语言/多版次并存，检索要能按版本过滤
+#   - 面向"照着做"的读者，答案要可执行；歧义会造成误操作，故歧义检测同样重要
+description: 客户交付文档（操作手册、实施方案、验收材料；图注承载信息）
+clause_patterns:
+  - '^\s*(?P<label>\d+(?:\.\d+){0,4})\s+(?P<title>\S.*)$'
+  - '^\s*(?P<label>步骤\s*\d+)\s*[：:.]?\s*(?P<title>\S.*)$'
+  - '^\s*(?P<label>[（(][一二三四五六七八九十]+[）)])\s*(?P<title>\S.*)$'
+table_cues: [表, 参数, 配置项, 默认值, 取值范围, 示例]
+citation_template: "[p.{page} §{clause}]"
+chunk:
+  max_chars: 700
+  overlap_chars: 100
+retrieve:
+  top_k: 6
+  arm_weights: {bm25_word: 1.0, bm25_char: 0.8}
+  table_boost: 1.2
+qa:
+  min_coverage: 0.45
+  min_top_score: 0.0
+  support_score_gate: null

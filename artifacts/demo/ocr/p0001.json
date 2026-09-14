@@ -1,0 +1,88 @@
+{
+  "blocks": [
+    {
+      "type": "heading",
+      "order": 0,
+      "clause_label": null,
+      "text": "示例技术规范"
+    },
+    {
+      "type": "paragraph",
+      "order": 1,
+      "clause_label": null,
+      "text": "Q/EXAMPLE 001—2026"
+    },
+    {
+      "type": "clause",
+      "order": 2,
+      "clause_label": "1",
+      "text": "1  范围"
+    },
+    {
+      "type": "paragraph",
+      "order": 3,
+      "clause_label": null,
+      "text": "本文件规定了示例件的术语、技术要求与验收规则。"
+    },
+    {
+      "type": "paragraph",
+      "order": 4,
+      "clause_label": null,
+      "text": "本文件适用于示例件的设计、制造与验收。"
+    },
+    {
+      "type": "clause",
+      "order": 5,
+      "clause_label": "2",
+      "text": "2  规范性引用文件"
+    },
+    {
+      "type": "paragraph",
+      "order": 6,
+      "clause_label": null,
+      "text": "Q/EXAMPLE 100—2025  示例件通用要求"
+    },
+    {
+      "type": "paragraph",
+      "order": 7,
+      "clause_label": null,
+      "text": "Q/EXAMPLE 200—2024  示例件检验方法"
+    },
+    {
+      "type": "clause",
+      "order": 8,
+      "clause_label": "3",
+      "text": "3  技术要求"
+    },
+    {
+      "type": "clause",
+      "order": 9,
+      "clause_label": "3.1",
+      "text": "3.1  示例件的额定载荷应大于等于 12.5 kN。"
+    },
+    {
+      "type": "clause",
+      "order": 10,
+      "clause_label": "3.2",
+      "text": "3.2  示例件表面不允许有裂纹、锈蚀与毛刺。"
+    },
+    {
+      "type": "clause",
+      "order": 11,
+      "clause_label": "3.3",
+      "text": "3.3  示例件的工作温度范围为 -20 ℃ ~ 60 ℃。"
+    },
+    {
+      "type": "clause",
+      "order": 12,
+      "clause_label": "3.4",
+      "text": "3.4  示例件的密封等级应不低于 IP54。"
+    },
+    {
+      "type": "clause",
+      "order": 13,
+      "clause_label": "3.5",
+      "text": "3.5  当公称直径 d 大于 8 mm 时，壁厚 t 应按 Q/EXAMPLE 100—2025 的规定，d ≤ 20 mm 取 2.0 mm；d > 20 mm 取 3.0 mm。"
+    }
+  ]
+}

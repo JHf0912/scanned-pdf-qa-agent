@@ -1,0 +1,31 @@
+# --- 密钥绝不入库 ---
+.env
+.env.*
+!.env.example
+
+# --- 输入文档不入库 ---
+# 输入是真实文件：GB/T 1568 取自官方公开预览（不再分发）。
+# 复现方式见 README 与 docs/troubleshooting.md。
+data/raw/
+
+# --- 中间产物不入库 ---
+# 中间产物；入库的是 data/golden/ 与 artifacts/ 下的溯源链。
+data/derived/
+out/
+
+# --- Python ---
+__pycache__/
+*.py[cod]
+.venv/
+*.egg-info/
+.pytest_cache/
+.coverage
+htmlcov/
+.ruff_cache/
+.mypy_cache/
+
+# --- 编辑器 / 系统 ---
+.vscode/
+.idea/
+Thumbs.db
+desktop.ini
