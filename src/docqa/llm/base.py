@@ -13,6 +13,7 @@ Anthropic Messages API、以及**没有模型时**的抽取式回退。三者的
 from __future__ import annotations
 
 import base64
+import hashlib
 import json
 import mimetypes
 import random
@@ -101,8 +102,23 @@ class LLMResponse:
         try:
             return json.loads(text)
         except json.JSONDecodeError as exc:
+            # **一个字都不回显**。OCR 场景下模型输出就是**文档正文的转录**，
+            # 回显 500 字符等于把半页文档写进日志——而这个异常还会被
+            # `vlm.py` / `pipeline.py` / `with_retry` 三处各截一段再打一次。
+            #
+            # HTTP 层早就做对了（`openai_compat.classify_status` 特意注明
+            # "不回显响应体…不会把不可信内容带进日志"），这条路径漏了。
+            #
+            # 只给**形态 + 长度 + 摘要哈希**：形态足以判断"是 HTML 错误页、
+            # 散文、还是截断的 JSON"，哈希足以在多次重试间对上"是不是同一个东西"，
+            # 两者都不泄漏内容。
+            # （试过"回显前 40 字符"——对短输出那就是全文，被测试当场抓出来了。）
+            shape = "含 { 的片段" if "{" in self.text else "不含 { 的文本"
+            digest = hashlib.sha256(self.text.encode("utf-8")).hexdigest()[:8]
             raise ProviderError(
-                f"模型返回的不是合法 JSON（{exc}）。原始返回前 500 字符：\n{self.text[:500]}",
+                f"模型返回的不是合法 JSON（{exc}）。"
+                f"返回 {len(self.text)} 字符，形态：{shape}，摘要：{digest}。"
+                f"（内容不回显：OCR 场景下模型输出即文档正文）",
                 retryable=True,
             ) from exc
 

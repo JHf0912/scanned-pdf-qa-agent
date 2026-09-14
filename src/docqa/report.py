@@ -148,6 +148,88 @@ def _render_grid(grid) -> str:
     )
 
 
+def _render_index_layer(rep: "EvalReport") -> str:
+    """渲染**索引层**（上下文可信度）指标。
+
+    为什么排在最前面
+    ----------------
+    检索层与生成层的每一个指标，都建立在"检索到的内容是对的"这个前提上。
+    扫描件场景里这个前提恰恰最不牢靠——识别错一个数字，
+    后面检索得再准、生成得再规范，答案也是错的，而且**错得毫无痕迹**。
+    所以这一层先报：它决定了后面那些数字有多少可信度。
+    """
+    ocr = getattr(rep, "ocr", None) or {}
+    if not ocr or not ocr.get("pages_evaluated"):
+        return (
+            "<h2>① 索引层（上下文可信度）</h2>"
+            '<div class="warnbox">本次未提供人工转写基准，'
+            "<b>这一层没有度量</b>——报告里不会出现 CER / 表格单元格准确率。"
+            "这不代表识别没有问题，只代表没有量。"
+            "加上 <code>--transcription data/golden/transcription.md</code> 即可计算。</div>"
+        )
+
+    out: list[str] = ["<h2>① 索引层（上下文可信度）——先行报告</h2>"]
+    out.append(
+        "<p class='sub'>这一层决定了后面两层的数字有多少可信度："
+        "检索与生成都建立在「检索到的内容是对的」这个前提上，"
+        "而扫描件场景里它最不牢靠。</p>"
+    )
+
+    cards: list[str] = []
+    if "character_accuracy" in ocr:
+        cards.append(_metric_card("字符准确率 (1−CER)", _pct(ocr["character_accuracy"]),
+                                  "与人工双读转写基准比对"))
+    if "cer_normalized" in ocr:
+        cards.append(_metric_card("归一化 CER", _pct(ocr["cer_normalized"]),
+                                  "去标点/繁简归一后"))
+    if "cer_strict" in ocr:
+        cards.append(_metric_card("符号敏感 CER", _pct(ocr["cer_strict"]),
+                                  "保留标点与单位，暴露符号级错误"))
+    if "numeric_field_recall" in ocr:
+        cards.append(_metric_card("数值字段召回", _pct(ocr["numeric_field_recall"]),
+                                  "数字漏读会直接导致答错"))
+    if "table_cell_accuracy" in ocr:
+        cards.append(_metric_card("表格单元格准确率", _pct(ocr["table_cell_accuracy"]),
+                                  "按语义位置取格比对"))
+    out.append(f'<div class="cards">{"".join(cards)}</div>')
+
+    out.append(
+        f"<p class='sub'>评估了 <b>{ocr['pages_evaluated']}</b> 页；"
+        f"对照方法：<code>{_esc(ocr.get('method', ''))}</code>。"
+        "参考基准是人工按页抽样的节选（非全文），所以采用逐行定位对齐，"
+        "而非整段直接比对——后者会把整页多出的内容全算成插入错误。</p>"
+    )
+
+    rows: list[str] = []
+    for e in ocr.get("per_page", []):
+        if not e.get("evaluated"):
+            rows.append(
+                f"<tr><td>{e.get('page_no')}</td><td colspan='4' class='muted'>"
+                f"未评估：{_esc(e.get('reason', ''))}</td></tr>"
+            )
+            continue
+        if e.get("kind") == "text":
+            rows.append(
+                f"<tr><td>{e['page_no']}</td><td>正文</td>"
+                f"<td>{_pct(e.get('cer_normalized', 0))}</td>"
+                f"<td>{_pct(e.get('cer_strict', 0))}</td>"
+                f"<td>{_pct(e.get('numeric_field_recall', 0))}</td></tr>"
+            )
+        else:
+            rows.append(
+                f"<tr><td>{e['page_no']}</td><td>表格</td>"
+                f"<td colspan='2'>{e.get('cells_correct')}/{e.get('cells_compared')} 格正确</td>"
+                f"<td>{_pct(e.get('cell_accuracy', 0))}</td></tr>"
+            )
+    if rows:
+        out.append(
+            "<table><tr><th>页</th><th>类型</th><th>归一化 CER</th>"
+            "<th>符号敏感 CER</th><th>数值召回 / 单元格准确率</th></tr>"
+            + "".join(rows) + "</table>"
+        )
+    return "".join(out)
+
+
 def _render_parse_section(rep: "EvalReport") -> str:
     """「PDF 解析结果」小节：正文 + 表格。
 
@@ -290,6 +372,8 @@ def render_html_report(rep: "EvalReport") -> str:
     for note in rep.notes:
         parts.append(f'<div class="warnbox">{_esc(note)}</div>')
 
+    # 索引层排在 PDF 解析结果之前：它决定了后面所有数字的可信度
+    parts.append(_render_index_layer(rep))
     parts.append(_render_parse_section(rep))
 
     # --- 分题型 ---

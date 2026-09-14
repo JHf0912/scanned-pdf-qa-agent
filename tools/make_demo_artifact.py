@@ -268,6 +268,55 @@ def build_page(page_idx: int, spec: list[tuple[str, str]]) -> Image.Image:
     return img
 
 
+def emit_transcription(path: Path) -> None:
+    """导出**索引层评估**用的人工转写基准（与 GB/T 那份同格式）。
+
+    为什么合成件也能有转写基准
+    --------------------------
+    真实扫描件的转写基准要靠人**两次独立阅读**再裁决（见 `data/golden/transcription.md`），
+    因为没有人知道原件到底印的是什么。
+
+    但这份 demo 是**程序生成的**——`PAGES` 与 `TABLE_BODY` 就是它的精确真值。
+    所以这里的"转写"不是人工判读的结果，而是**生成源本身**：
+    它比任何人工转写都准，而且完全可复现。
+
+    这一点必须写清楚，否则读者会以为索引层指标是拿人工基准量出来的。
+    """
+    out: list[str] = [
+        "# 示例件转写基准（索引层评估用）\n",
+        "**来源与 GB/T 那份不同，用之前必须知道**：\n",
+        "本文件的文本**不是人工判读**，而是从 `tools/make_demo_artifact.py` 的",
+        "`PAGES` / `TABLE_BODY` 常量**程序化导出**的——那就是这份合成件的精确真值。",
+        "因此这里的索引层指标衡量的是「管线有没有如实传递源文本」，",
+        "**不能**用来声称任何 OCR 识别能力（fixture 引擎本身零误差是构造出来的）。\n",
+        "格式与 `data/golden/transcription.md` 一致，可直接喂给",
+        "`docqa eval --transcription`。\n",
+    ]
+
+    for i, spec in enumerate(PAGES, start=1):
+        out.append(f"### 第 {i} 页\n")
+        lines = [text for kind, text in spec if kind in ("clause", "p", "h2") and text]
+        if lines:
+            out.append("```")
+            out.extend(lines)
+            out.append("```\n")
+
+    # 表格页：导出**折叠形式**（4 列），与 GB/T 基准同形态。
+    # 展开形式由 TableGrid 承担，这里给的是"人读到的那张表"。
+    for i, spec in enumerate(PAGES, start=1):
+        if not any(kind == "table" for kind, _ in spec):
+            continue
+        cols = [c[0] for c in TABLE_HEADER[1] if c[0]]
+        out.append(f"### 第 {i} 页（表格页）— 表 1 网格基准\n")
+        out.append("| 检验项目 | " + " | ".join(cols) + " |")
+        out.append("|" + "---|" * (len(cols) + 1))
+        for row in TABLE_BODY:
+            out.append("| " + " | ".join(row) + " |")
+        out.append("")
+
+    path.write_text("\n".join(out), encoding="utf-8")
+
+
 def main() -> int:
     DEMO_DIR.mkdir(parents=True, exist_ok=True)
     RAW_DIR.mkdir(parents=True, exist_ok=True)
@@ -293,6 +342,9 @@ def main() -> int:
         (ocr_dir / f"p{i:04d}.json").write_text(
             json.dumps({"blocks": blocks}, ensure_ascii=False, indent=2), encoding="utf-8"
         )
+    emit_transcription(DEMO_DIR / "transcription.md")
+    print(f"已生成 {DEMO_DIR / 'transcription.md'}（索引层评估基准）")
+
     (ocr_dir / "README.md").write_text(
         "# 这份 fixture 是构造出来的，不是识别出来的\n\n"
         "其中的结构化块由 `tools/make_demo_artifact.py` **从同一份源文本程序化生成**，\n"

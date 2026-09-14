@@ -163,18 +163,32 @@ def find_cell(grid: TableGrid, *, row_label: str, col_label: str) -> tuple[str, 
     if not grid.cells or grid.n_rows == 0:
         return None
 
+    # 匹配前做两件归一化：
+    #   1. **去掉空白**：国标表头常写成「平　键」（全角空格），调用方写「平键」；
+    #   2. **NFKD 折叠上下标**：OCR 常把 `d₁` 读成 `d1`（下标丢失）。
+    #
+    # 第 2 条尤其重要：若不折叠，整行会**定位失败**（返回 None），
+    # 而它其实只是**取值**有差异。**"定位失败"与"值不对"是两回事**，
+    # 前者说明表格结构没对上，后者才是识别错误——混为一谈会让指标失真。
+    # 注意这里只放宽**定位**，取值比较仍走 `compare_tables_semantically` 的严格归一化。
+    def _norm(s: str) -> str:
+        import unicodedata
+        return "".join(unicodedata.normalize("NFKD", s).split())
+
+    want_row = _norm(row_label)
     row_idx: int | None = None
     for r in range(grid.n_rows):
-        if grid.cells[r] and row_label in grid.cells[r][0]:
+        if grid.cells[r] and want_row in _norm(grid.cells[r][0]):
             row_idx = r
             break
     if row_idx is None:
         return None
 
+    want_col = _norm(col_label)
     col_idx: int | None = None
     for r in range(min(grid.n_header_rows, grid.n_rows)):
         for c in range(grid.n_cols):
-            if col_label in grid.cells[r][c]:
+            if want_col in _norm(grid.cells[r][c]):
                 col_idx = c
                 break
         if col_idx is not None:

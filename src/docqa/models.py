@@ -276,7 +276,31 @@ class OcrPage:
     error: str | None = None
 
     def plain_text(self) -> str:
-        return "\n".join(b.text for b in sorted(self.blocks, key=lambda b: b.order))
+        """按阅读顺序拼接整页文本，**并把块上的条号补回去**。
+
+        为什么必须补
+        ------------
+        VLM 通常把条号放进结构化的 `clause_label` 字段，`text` 里只剩正文
+        （「范围」而不是「1  范围」）。只拼 `text` 会让这份文本表示**丢掉条号**，
+        而它有两个真实后果：
+
+        1. **索引层评估**：参考转写里写着「3.1」，OCR 文本里找不到 →
+           条号被报成"没识别出来"，数值召回被无端拉低，
+           读起来像识别质量问题，实际是文本表示漏了字段；
+        2. **跨引擎比对**：两个引擎对**条号**的分歧恰恰是最该抓的高风险差异之一
+           （错一个条号，答案就引到了别的条款上）。丢掉它等于把一路信号静默关掉。
+
+        正文里已经带了条号的（模型有时会原样写进 text）不重复补。
+        """
+        parts: list[str] = []
+        for b in sorted(self.blocks, key=lambda b: b.order):
+            label = (b.clause_label or "").strip()
+            text = b.text or ""
+            if label and not text.lstrip().startswith(label):
+                parts.append(f"{label}  {text}" if text.strip() else label)
+            else:
+                parts.append(text)
+        return "\n".join(parts)
 
     def to_dict(self) -> dict:
         return {

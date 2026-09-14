@@ -1,0 +1,949 @@
+<!DOCTYPE html>
+<html lang="zh-CN"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>docqa 评估报告 · demo_scan-45536714</title>
+<style>
+:root{
+  --bg:#fbfaf7; --panel:#fff; --ink:#1b1a17; --muted:#6b6862; --line:#e3ded4;
+  --ok:#1f7a4d; --warn:#a86500; --bad:#a32b1e; --accent:#2c5f8a;
+  --mono:ui-monospace,SFMono-Regular,"SF Mono",Menlo,Consolas,monospace;
+}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);
+  font:15px/1.65 -apple-system,BlinkMacSystemFont,"Segoe UI","Noto Sans SC","PingFang SC","Microsoft YaHei",sans-serif;}
+.wrap{max-width:1080px;margin:0 auto;padding:48px 24px 96px}
+h1{font-size:30px;letter-spacing:-.02em;margin:0 0 6px}
+h2{font-size:20px;margin:44px 0 14px;padding-bottom:8px;border-bottom:2px solid var(--line)}
+h3{font-size:16px;margin:26px 0 8px}
+.sub{color:var(--muted);margin:0 0 8px}
+.meta{color:var(--muted);font-size:13px;font-family:var(--mono)}
+.cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(168px,1fr));gap:12px;margin:20px 0}
+.card{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:14px 16px}
+.card .k{font-size:12px;color:var(--muted);text-transform:uppercase;letter-spacing:.06em}
+.card .v{font-size:26px;font-weight:650;margin-top:4px;font-variant-numeric:tabular-nums}
+.card .n{font-size:12px;color:var(--muted);margin-top:2px}
+table{width:100%;border-collapse:collapse;margin:12px 0;font-size:14px}
+th,td{text-align:left;padding:9px 10px;border-bottom:1px solid var(--line);vertical-align:top}
+th{font-weight:600;color:var(--muted);font-size:12px;text-transform:uppercase;letter-spacing:.05em}
+td.num{font-variant-numeric:tabular-nums;font-family:var(--mono)}
+.pass{color:var(--ok);font-weight:600}
+.fail{color:var(--bad);font-weight:600}
+.warnbox{background:#fff8e6;border:1px solid #f0dfae;border-left:4px solid var(--warn);
+  border-radius:8px;padding:12px 16px;margin:14px 0;font-size:14px}
+.q{background:var(--panel);border:1px solid var(--line);border-radius:10px;
+  padding:16px 18px;margin:14px 0}
+.q .head{display:flex;justify-content:space-between;gap:12px;align-items:baseline;flex-wrap:wrap}
+.q .qq{font-weight:640;font-size:15.5px}
+.tag{font-size:11px;padding:2px 8px;border-radius:99px;background:#eef1f4;color:var(--muted);
+  font-family:var(--mono);white-space:nowrap}
+.ans{margin:10px 0 6px;padding:10px 12px;background:#f7f9f7;border-left:3px solid var(--ok);border-radius:0 6px 6px 0}
+.ans.refused{background:#fdf6f4;border-left-color:var(--warn)}
+.cites{margin-top:10px;font-size:13.5px}
+.cites code{font-family:var(--mono);background:#eef1f4;padding:1px 6px;border-radius:4px;font-size:12.5px}
+.checks{margin-top:10px;font-size:13px}
+.checks span{font-family:var(--mono);margin-right:12px}
+.trace{margin-top:8px;font-size:12.5px;color:var(--muted);font-family:var(--mono)}
+.bar{height:7px;background:#eceae4;border-radius:99px;overflow:hidden;margin-top:6px}
+.bar>i{display:block;height:100%;background:var(--accent)}
+.tablewrap{overflow-x:auto;border:1px solid var(--line);border-radius:8px;margin:8px 0}
+.tablewrap table{margin:0}
+.tablewrap th,.tablewrap td{border:1px solid var(--line);text-align:center}
+.tablewrap th{background:#f5f3ee}
+.blocks{margin:8px 0;border:1px solid var(--line);border-radius:8px;overflow:hidden}
+.blk{padding:8px 12px;border-bottom:1px solid var(--line);font-size:14px;white-space:pre-wrap}
+.blk:last-child{border-bottom:0}
+.blk .bt{font-family:var(--mono);font-size:11px;color:var(--muted);background:#eef1f4;
+  padding:1px 7px;border-radius:99px;margin-right:8px}
+.blk .chip{font-size:11px;padding:1px 7px;border-radius:99px;margin-left:8px}
+.blk .chip.warn{background:#fdeecd;color:var(--warn)}
+h4{font-size:14px;font-weight:600}
+details{margin-top:8px}
+summary{cursor:pointer;color:var(--muted);font-size:13px}
+pre{background:#f5f3ee;border:1px solid var(--line);border-radius:8px;padding:12px;
+  overflow:auto;font-size:12.5px;font-family:var(--mono)}
+footer{margin-top:64px;padding-top:18px;border-top:1px solid var(--line);
+  color:var(--muted);font-size:12.5px}
+</style></head><body><div class="wrap"><h1>扫描版 PDF 问答系统 · 评估报告</h1>
+<p class="sub">文档 <b>demo_scan-45536714</b> ｜ 场景 <code>standard</code>
+ ｜ OCR 引擎 <code>fixture</code></p>
+<p class="meta">耗时 0.02s ｜ 共 13 题</p><div class="cards"><div class="card"><div class="k">题目数</div><div class="v">13</div></div><div class="card"><div class="k">通过</div><div class="v">11</div><div class="n">95% CI [58%, 96%]</div></div><div class="card"><div class="k">准确率</div><div class="v">85%</div><div class="n">95% CI [58%, 96%]</div></div><div class="card"><div class="k">拒答精确率</div><div class="v">100%</div><div class="n">95% CI [34%, 100%]</div></div><div class="card"><div class="k">拒答召回率</div><div class="v">100%</div><div class="n">95% CI [34%, 100%]</div></div><div class="card"><div class="k">上下文利用率</div><div class="v">85%</div><div class="n">被引 chunk / 召回 chunk</div></div><div class="card"><div class="k">平均尝试轮次</div><div class="v">1.00</div><div class="n">自检触发修复的频次</div></div></div><div class="warnbox"><b>关于这些数字的可信度。</b>每个比例都附了 Wilson 95% 置信区间。本报告样本量小，「100%」往往只反映样本不足——例如 n=3 全对时，置信下界仅 44%。请结合区间与样本量解读，不要只看点估计。</div><div class="warnbox">本次运行使用 fixture 引擎，**不是真实 OCR 结果**，不得据此声明 OCR 精度。</div><div class="warnbox">语料仅 16 个片段，Recall@k / MRR 在如此小的语料上没有统计意义（Recall@1 的随机基线即 1/16）。这里把它当作**管路连通性检查**报告，不作为检索质量证据。</div><h2>① 索引层（上下文可信度）——先行报告</h2><p class='sub'>这一层决定了后面两层的数字有多少可信度：检索与生成都建立在「检索到的内容是对的」这个前提上，而扫描件场景里它最不牢靠。</p><div class="cards"><div class="card"><div class="k">字符准确率 (1−CER)</div><div class="v">100%</div><div class="n">与人工双读转写基准比对</div></div><div class="card"><div class="k">归一化 CER</div><div class="v">0%</div><div class="n">去标点/繁简归一后</div></div><div class="card"><div class="k">符号敏感 CER</div><div class="v">4%</div><div class="n">保留标点与单位，暴露符号级错误</div></div><div class="card"><div class="k">数值字段召回</div><div class="v">100%</div><div class="n">数字漏读会直接导致答错</div></div></div><p class='sub'>评估了 <b>2</b> 页；对照方法：<code>最佳窗口对齐（参考为节选，OCR 为整页）</code>。参考基准是人工按页抽样的节选（非全文），所以采用逐行定位对齐，而非整段直接比对——后者会把整页多出的内容全算成插入错误。</p><table><tr><th>页</th><th>类型</th><th>归一化 CER</th><th>符号敏感 CER</th><th>数值召回 / 单元格准确率</th></tr><tr><td>1</td><td>正文</td><td>0%</td><td>3%</td><td>100%</td></tr><tr><td>2</td><td>正文</td><td>0%</td><td>4%</td><td>100%</td></tr></table><h2>PDF 解析结果</h2><p class="meta">引擎 <code>fixture</code>　模型 <code>fixture</code>　共 2 页　识别失败 0 页</p><div class="cards"><div class="card"><div class="k">解析页数</div><div class="v">2</div></div><div class="card"><div class="k">文本块</div><div class="v">22</div></div><div class="card"><div class="k">表格</div><div class="v">1</div></div><div class="card"><div class="k">识别失败页</div><div class="v">0</div></div></div><h3>第 1 页 · 1240×1754px · 150 DPI · 位精确取图<span class="tag" style="margin-left:10px">14 块 / 0 表</span></h3><div class="blocks"><div class="blk"><span class="bt">heading</span>示例技术规范</div><div class="blk"><span class="bt">paragraph</span>Q/EXAMPLE 001—2026</div><div class="blk"><span class="bt">clause</span><code>1</code> 1  范围</div><div class="blk"><span class="bt">paragraph</span>本文件规定了示例件的术语、技术要求与验收规则。</div><div class="blk"><span class="bt">paragraph</span>本文件适用于示例件的设计、制造与验收。</div><div class="blk"><span class="bt">clause</span><code>2</code> 2  规范性引用文件</div><div class="blk"><span class="bt">paragraph</span>Q/EXAMPLE 100—2025  示例件通用要求</div><div class="blk"><span class="bt">paragraph</span>Q/EXAMPLE 200—2024  示例件检验方法</div><div class="blk"><span class="bt">clause</span><code>3</code> 3  技术要求</div><div class="blk"><span class="bt">clause</span><code>3.1</code> 3.1  示例件的额定载荷应大于等于 12.5 kN。</div><div class="blk"><span class="bt">clause</span><code>3.2</code> 3.2  示例件表面不允许有裂纹、锈蚀与毛刺。</div><div class="blk"><span class="bt">clause</span><code>3.3</code> 3.3  示例件的工作温度范围为 -20 ℃ ~ 60 ℃。</div><div class="blk"><span class="bt">clause</span><code>3.4</code> 3.4  示例件的密封等级应不低于 IP54。</div><div class="blk"><span class="bt">clause</span><code>3.5</code> 3.5  当公称直径 d 大于 8 mm 时，壁厚 t 应按 Q/EXAMPLE 100—2025 的规定，d ≤ 20 mm 取 2.0 mm；d &gt; 20 mm 取 3.0 mm。</div></div><h3>第 2 页 · 1240×1754px · 150 DPI · 位精确取图<span class="tag" style="margin-left:10px">8 块 / 1 表</span></h3><h4 style="margin:14px 0 4px">表 1  检验项目与合格质量水平 AQL</h4><div class="tablewrap"><table><tr><th>检验项目</th><th>合格质量水平 AQL</th><th>合格质量水平 AQL</th><th>合格质量水平 AQL</th></tr><tr><th>检验项目</th><th>甲型</th><th>乙型</th><th>丙型</th></tr><tr><td>外径</td><td>1.0</td><td>1.0</td><td>1.5</td></tr><tr><td>壁厚</td><td>2.5</td><td>2.5</td><td>2.5</td></tr><tr><td>长度</td><td>4</td><td>—</td><td>4</td></tr><tr><td>密封等级</td><td>—</td><td>2.5</td><td>—</td></tr></table></div><div class="meta" style="margin-top:6px">6 行 × 4 列　表头 2 行　合并块 0 处</div><div class="blocks"><div class="blk"><span class="bt">clause</span><code>4</code> 4  验收规则</div><div class="blk"><span class="bt">paragraph</span>示例件的检验项目与合格质量水平见表 1。</div><div class="blk"><span class="bt">clause</span><code>4.1</code> 4.1  按 Q/EXAMPLE 200—2024 的规定进行抽样检验。</div><div class="blk"><span class="bt">clause</span><code>4.2</code> 4.2  样本量 n 为 8，合格判定数为 Ac。</div><div class="blk"><span class="bt">clause</span><code>5</code> 5  标志与包装</div><div class="blk"><span class="bt">clause</span><code>5.1</code> 5.1  包装箱外表面应标明制造厂名、产品名称与出厂日期。</div><div class="blk"><span class="bt">clause</span><code>5.2</code> 5.2  产品应涂防锈剂，自出厂之日起一年内不生锈。</div></div><h2>按题型分组</h2><p class='sub'>总体准确率会被数量多的题型拉平，掩盖短板，所以必须分组看。</p><table><tr><th>题型</th><th>n</th><th>通过</th><th>准确率</th><th>95% Wilson CI</th></tr><tr><td><code>clause</code></td><td class='num'>5</td><td class='num'>5</td><td class='num'>100%</td><td class='num'>[57%, 100%]</td></tr><tr><td><code>negation</code></td><td class='num'>1</td><td class='num'>0</td><td class='num'>0%</td><td class='num'>[0%, 79%]</td></tr><tr><td><code>no_answer</code></td><td class='num'>2</td><td class='num'>2</td><td class='num'>100%</td><td class='num'>[34%, 100%]</td></tr><tr><td><code>ocr_stress</code></td><td class='num'>1</td><td class='num'>1</td><td class='num'>100%</td><td class='num'>[21%, 100%]</td></tr><tr><td><code>table</code></td><td class='num'>4</td><td class='num'>3</td><td class='num'>75%</td><td class='num'>[30%, 95%]</td></tr></table><div class="bar"><i style="width:85%"></i></div><h2>自检有效性：对抗变异检出率</h2><p class='sub'>对正确答案注入**已知的**错误，看自检能否抓住。这是「我做了自检」这句话唯一能被证伪的方式。</p><table><tr><th>变异类型</th><th>检出 / 总数</th><th>检出率</th><th>由哪条检查负责</th></tr><tr><td><code>citation</code></td><td class='num'>11 / 11</td><td class='num pass'>100%</td><td>citation_validity</td></tr><tr><td><code>clause</code></td><td class='num'>24 / 40</td><td class='num warn'>60%</td><td>clause_consistency / numeric_grounding</td></tr><tr><td><code>fabricate</code></td><td class='num'>6 / 11</td><td class='num warn'>55%</td><td>（无专门机制——纯文字编造需要句级支撑度或人工复核）</td></tr><tr><td><code>number</code></td><td class='num'>28 / 44</td><td class='num warn'>64%</td><td>numeric_grounding</td></tr><tr><td><code>unit</code></td><td class='num'>2 / 2</td><td class='num pass'>100%</td><td>numeric_grounding</td></tr></table><p class='sub'>总体检出率 <b>66%</b>（共 108 个变异）。检出率低的类型不代表自检没用，而说明**该类错误超出了现有检查的设计范围**——例如纯文字编造需要句级支撑度或人工复核，报告里已如实标出。</p><h2>逐题明细</h2><div class="q">
+<div class="head"><span class="qq">示例件的额定载荷要求是多少？</span>
+<span class="tag">clause · PASS · 尝试 1 轮</span></div>
+<div class="ans ">（未配置生成模型，以下为检索到的证据原文）
+3.1  示例件的额定载荷应大于等于 12.5 kN。 [p.1 §3.1]
+1  范围 本文件规定了示例件的术语、技术要求与验收规则。 本文件适用于示例件的设计、制造与验收。 [p.1 §1]
+3.4  示例件的密封等级应不低于 IP54。 [p.1 §3.4]
+3.3  示例件的工作温度范围为 -20 ℃ ~ 60 ℃。 [p.1 §3.3]
+2  规范性引用文件 Q/EXAMPLE 100—2025  示例件通用要求 Q/EXAMPLE 200—2024  示例件检验方法 [p.1 §2]
+4  验收规则 示例件的检验项目与合格质量水平见表 1</div>
+
+<div class="cites">引用页码：<code>p.1</code> <code>p.2</code> 　支撑度 0.92
+　上下文利用率 100%</div>
+<div class="checks"><span class='pass'>✓ citation_validity</span><span class='pass'>✓ numeric_grounding</span><span class='pass'>✓ clause_consistency</span><span class='pass'>✓ sentence_support</span></div>
+<div class="trace">轨迹：retrieve → draft → verify</div>
+</div><div class="q">
+<div class="head"><span class="qq">示例件的工作温度范围是多少？</span>
+<span class="tag">clause · PASS · 尝试 1 轮</span></div>
+<div class="ans ">（未配置生成模型，以下为检索到的证据原文）
+3.3  示例件的工作温度范围为 -20 ℃ ~ 60 ℃。 [p.1 §3.3]
+1  范围 本文件规定了示例件的术语、技术要求与验收规则。 本文件适用于示例件的设计、制造与验收。 [p.1 §1]
+3.4  示例件的密封等级应不低于 IP54。 [p.1 §3.4]
+3.1  示例件的额定载荷应大于等于 12.5 kN。 [p.1 §3.1]
+4  验收规则 示例件的检验项目与合格质量水平见表 1。 [p.2 §4]
+2  规范性引用文件 Q/EXAMPLE 100—2025  示例件通用要求 Q/EXAMPLE 200—2024  示例件检验方</div>
+
+<div class="cites">引用页码：<code>p.1</code> <code>p.2</code> 　支撑度 0.92
+　上下文利用率 100%</div>
+<div class="checks"><span class='pass'>✓ citation_validity</span><span class='pass'>✓ numeric_grounding</span><span class='pass'>✓ clause_consistency</span><span class='pass'>✓ sentence_support</span></div>
+<div class="trace">轨迹：retrieve → draft → verify</div>
+</div><div class="q">
+<div class="head"><span class="qq">示例件的密封等级要求是什么？</span>
+<span class="tag">clause · PASS · 尝试 1 轮</span></div>
+<div class="ans ">（未配置生成模型，以下为检索到的证据原文）
+3.4  示例件的密封等级应不低于 IP54。 [p.1 §3.4]
+1  范围 本文件规定了示例件的术语、技术要求与验收规则。 本文件适用于示例件的设计、制造与验收。 [p.1 §1]
+3.1  示例件的额定载荷应大于等于 12.5 kN。 [p.1 §3.1]
+3.3  示例件的工作温度范围为 -20 ℃ ~ 60 ℃。 [p.1 §3.3]
+2  规范性引用文件 Q/EXAMPLE 100—2025  示例件通用要求 Q/EXAMPLE 200—2024  示例件检验方法 [p.1 §2]
+4  验收规则 示例件的检验项目与合格质量水平见表 1</div>
+
+<div class="cites">引用页码：<code>p.1</code> <code>p.2</code> 　支撑度 0.92
+　上下文利用率 100%</div>
+<div class="checks"><span class='pass'>✓ citation_validity</span><span class='pass'>✓ numeric_grounding</span><span class='pass'>✓ clause_consistency</span><span class='pass'>✓ sentence_support</span></div>
+<div class="trace">轨迹：retrieve → draft → verify</div>
+</div><div class="q">
+<div class="head"><span class="qq">公称直径大于 8 mm 时壁厚如何取值？</span>
+<span class="tag">clause · PASS · 尝试 1 轮</span></div>
+<div class="ans ">（未配置生成模型，以下为检索到的证据原文）
+3.5  当公称直径 d 大于 8 mm 时，壁厚 t 应按 Q/EXAMPLE 100—2025 的规定，d ≤ 20 mm 取 2.0 mm；d &gt; 20 mm 取 3.0 mm。 [p.1 §3.5]
+3.1  示例件的额定载荷应大于等于 12.5 kN。 [p.1 §3.1]
+**表 1  检验项目与合格质量水平 AQL** | 检验项目 | 合格质量水平 AQL | 合格质量水平 AQL | 合格质量水平 AQL | | 检验项目 | 甲型 | 乙型 | 丙型 | |---|---|---|---| | 外径 | 1.0 | 1.0 | 1</div>
+
+<div class="cites">引用页码：<code>p.1</code> <code>p.2</code> 　支撑度 0.89
+　上下文利用率 100%</div>
+<div class="checks"><span class='pass'>✓ citation_validity</span><span class='pass'>✓ numeric_grounding</span><span class='pass'>✓ clause_consistency</span><span class='pass'>✓ sentence_support</span></div>
+<div class="trace">轨迹：retrieve → draft → verify</div>
+</div><div class="q">
+<div class="head"><span class="qq">本文件的适用范围是什么？</span>
+<span class="tag">clause · PASS · 尝试 1 轮</span></div>
+<div class="ans ">（未配置生成模型，以下为检索到的证据原文）
+1  范围 本文件规定了示例件的术语、技术要求与验收规则。 本文件适用于示例件的设计、制造与验收。 [p.1 §1]
+2  规范性引用文件 Q/EXAMPLE 100—2025  示例件通用要求 Q/EXAMPLE 200—2024  示例件检验方法 [p.1 §2]
+3.4  示例件的密封等级应不低于 IP54。 [p.1 §3.4]
+3.3  示例件的工作温度范围为 -20 ℃ ~ 60 ℃。 [p.1 §3.3]
+3.1  示例件的额定载荷应大于等于 12.5 kN。 [p.1 §3.1]
+4  验收规则 示例件的检验项目与合格质量水平见表 1</div>
+
+<div class="cites">引用页码：<code>p.1</code> <code>p.2</code> 　支撑度 0.92
+　上下文利用率 100%</div>
+<div class="checks"><span class='pass'>✓ citation_validity</span><span class='pass'>✓ numeric_grounding</span><span class='pass'>✓ clause_consistency</span><span class='pass'>✓ sentence_support</span></div>
+<div class="trace">轨迹：retrieve → draft → verify</div>
+</div><div class="q">
+<div class="head"><span class="qq">表 1 中乙型的外径 AQL 是多少？</span>
+<span class="tag">table · FAIL · 尝试 1 轮</span></div>
+<div class="ans ">（未配置生成模型，以下为检索到的证据原文）
+**表 1  检验项目与合格质量水平 AQL** | 检验项目 | 合格质量水平 AQL | 合格质量水平 AQL | 合格质量水平 AQL | | 检验项目 | 甲型 | 乙型 | 丙型 | |---|---|---|---| | 外径 | 1.0 | 1.0 | 1.5 | | 壁厚 | 2.5 | 2.5 | 2.5 | | 长度 | 4 | — | 4 | | 密封等级 | — | 2.5 | — | [p.2 §表 1]
+4  验收规则 示例件的检验项目与合格质量水平见表 1。 [p.2 §4]
+1  范围 本文件规定了示例件的术语、技术要</div>
+<div class='fail'>出现禁止内容：1.5</div>
+<div class="cites">引用页码：<code>p.1</code> <code>p.2</code> 　支撑度 0.92
+　上下文利用率 100%</div>
+<div class="checks"><span class='pass'>✓ citation_validity</span><span class='pass'>✓ numeric_grounding</span><span class='pass'>✓ clause_consistency</span><span class='pass'>✓ sentence_support</span></div>
+<div class="trace">轨迹：retrieve → draft → verify</div>
+</div><div class="q">
+<div class="head"><span class="qq">表 1 中乙型的壁厚 AQL 是多少？</span>
+<span class="tag">table · PASS · 尝试 1 轮</span></div>
+<div class="ans ">（未配置生成模型，以下为检索到的证据原文）
+**表 1  检验项目与合格质量水平 AQL** | 检验项目 | 合格质量水平 AQL | 合格质量水平 AQL | 合格质量水平 AQL | | 检验项目 | 甲型 | 乙型 | 丙型 | |---|---|---|---| | 外径 | 1.0 | 1.0 | 1.5 | | 壁厚 | 2.5 | 2.5 | 2.5 | | 长度 | 4 | — | 4 | | 密封等级 | — | 2.5 | — | [p.2 §表 1]
+4  验收规则 示例件的检验项目与合格质量水平见表 1。 [p.2 §4]
+3.5  当公称直径 d 大于 8 mm 时</div>
+
+<div class="cites">引用页码：<code>p.1</code> <code>p.2</code> 　支撑度 0.92
+　上下文利用率 100%</div>
+<div class="checks"><span class='pass'>✓ citation_validity</span><span class='pass'>✓ numeric_grounding</span><span class='pass'>✓ clause_consistency</span><span class='pass'>✓ sentence_support</span></div>
+<div class="trace">轨迹：retrieve → draft → verify</div>
+</div><div class="q">
+<div class="head"><span class="qq">表 1 中丙型的长度 AQL 是多少？</span>
+<span class="tag">table · PASS · 尝试 1 轮</span></div>
+<div class="ans ">（未配置生成模型，以下为检索到的证据原文）
+**表 1  检验项目与合格质量水平 AQL** | 检验项目 | 合格质量水平 AQL | 合格质量水平 AQL | 合格质量水平 AQL | | 检验项目 | 甲型 | 乙型 | 丙型 | |---|---|---|---| | 外径 | 1.0 | 1.0 | 1.5 | | 壁厚 | 2.5 | 2.5 | 2.5 | | 长度 | 4 | — | 4 | | 密封等级 | — | 2.5 | — | [p.2 §表 1]
+4  验收规则 示例件的检验项目与合格质量水平见表 1。 [p.2 §4]
+1  范围 本文件规定了示例件的术语、技术要</div>
+
+<div class="cites">引用页码：<code>p.1</code> <code>p.2</code> 　支撑度 0.92
+　上下文利用率 100%</div>
+<div class="checks"><span class='pass'>✓ citation_validity</span><span class='pass'>✓ numeric_grounding</span><span class='pass'>✓ clause_consistency</span><span class='pass'>✓ sentence_support</span></div>
+<div class="trace">轨迹：retrieve → draft → verify</div>
+</div><div class="q">
+<div class="head"><span class="qq">表 1 中甲型的密封等级 AQL 是多少？</span>
+<span class="tag">table · PASS · 尝试 1 轮</span></div>
+<div class="ans ">（未配置生成模型，以下为检索到的证据原文）
+**表 1  检验项目与合格质量水平 AQL** | 检验项目 | 合格质量水平 AQL | 合格质量水平 AQL | 合格质量水平 AQL | | 检验项目 | 甲型 | 乙型 | 丙型 | |---|---|---|---| | 外径 | 1.0 | 1.0 | 1.5 | | 壁厚 | 2.5 | 2.5 | 2.5 | | 长度 | 4 | — | 4 | | 密封等级 | — | 2.5 | — | [p.2 §表 1]
+3.4  示例件的密封等级应不低于 IP54。 [p.1 §3.4]
+4  验收规则 示例件的检验项目与合格质量水平见表</div>
+
+<div class="cites">引用页码：<code>p.1</code> <code>p.2</code> 　支撑度 0.92
+　上下文利用率 100%</div>
+<div class="checks"><span class='pass'>✓ citation_validity</span><span class='pass'>✓ numeric_grounding</span><span class='pass'>✓ clause_consistency</span><span class='pass'>✓ sentence_support</span></div>
+<div class="trace">轨迹：retrieve → draft → verify</div>
+</div><div class="q">
+<div class="head"><span class="qq">示例件的整机重量是多少？</span>
+<span class="tag">no_answer · PASS · 尝试 1 轮</span></div>
+<div class="ans refused"><i>（无答案）</i></div>
+<div class='meta'>拒答理由：not_in_document　（拒答正确）</div>
+<div class="cites">引用页码：<i>无</i>　支撑度 0.00
+　上下文利用率 0%</div>
+<div class="checks"></div>
+<div class="trace">轨迹：retrieve → precheck</div>
+</div><div class="q">
+<div class="head"><span class="qq">示例件的质保期是多久？</span>
+<span class="tag">no_answer · PASS · 尝试 1 轮</span></div>
+<div class="ans refused"><i>（无答案）</i></div>
+<div class='meta'>拒答理由：not_in_document　（拒答正确）</div>
+<div class="cites">引用页码：<i>无</i>　支撑度 0.00
+　上下文利用率 0%</div>
+<div class="checks"></div>
+<div class="trace">轨迹：retrieve → precheck</div>
+</div><div class="q">
+<div class="head"><span class="qq">本文件是否规定了示例件的材料牌号？</span>
+<span class="tag">negation · FAIL · 尝试 1 轮</span></div>
+<div class="ans ">（未配置生成模型，以下为检索到的证据原文）
+1  范围 本文件规定了示例件的术语、技术要求与验收规则。 本文件适用于示例件的设计、制造与验收。 [p.1 §1]
+2  规范性引用文件 Q/EXAMPLE 100—2025  示例件通用要求 Q/EXAMPLE 200—2024  示例件检验方法 [p.1 §2]
+3.4  示例件的密封等级应不低于 IP54。 [p.1 §3.4]
+3.3  示例件的工作温度范围为 -20 ℃ ~ 60 ℃。 [p.1 §3.3]
+3.1  示例件的额定载荷应大于等于 12.5 kN。 [p.1 §3.1]
+4.1  按 Q/EXAMPLE 200—2024 的</div>
+<div class='fail'>缺失关键事实：未规定</div>
+<div class="cites">引用页码：<code>p.1</code> <code>p.2</code> 　支撑度 0.92
+　上下文利用率 100%</div>
+<div class="checks"><span class='pass'>✓ citation_validity</span><span class='pass'>✓ numeric_grounding</span><span class='pass'>✓ clause_consistency</span><span class='pass'>✓ sentence_support</span></div>
+<div class="trace">轨迹：retrieve → draft → verify</div>
+</div><div class="q">
+<div class="head"><span class="qq">本文件引用了哪些规范性文件？</span>
+<span class="tag">ocr_stress · PASS · 尝试 1 轮</span></div>
+<div class="ans ">（未配置生成模型，以下为检索到的证据原文）
+1  范围 本文件规定了示例件的术语、技术要求与验收规则。 本文件适用于示例件的设计、制造与验收。 [p.1 §1]
+2  规范性引用文件 Q/EXAMPLE 100—2025  示例件通用要求 Q/EXAMPLE 200—2024  示例件检验方法 [p.1 §2]
+示例技术规范 Q/EXAMPLE 001—2026 [p.1 ¶1]</div>
+
+<div class="cites">引用页码：<code>p.1</code> 　支撑度 0.83
+　上下文利用率 100%</div>
+<div class="checks"><span class='pass'>✓ citation_validity</span><span class='pass'>✓ numeric_grounding</span><span class='pass'>✓ clause_consistency</span><span class='pass'>✓ sentence_support</span></div>
+<div class="trace">轨迹：retrieve → draft → verify</div>
+</div><h2>原始结果</h2><details><summary>展开 JSON</summary><pre>{
+  &quot;engine&quot;: &quot;fixture&quot;,
+  &quot;doc_id&quot;: &quot;demo_scan-45536714&quot;,
+  &quot;domain&quot;: &quot;standard&quot;,
+  &quot;metrics&quot;: {
+    &quot;items&quot;: 13,
+    &quot;passed&quot;: 11,
+    &quot;accuracy&quot;: 0.8461538461538461,
+    &quot;refusal_precision&quot;: 1.0,
+    &quot;refusal_recall&quot;: 1.0,
+    &quot;citation_validity_rate&quot;: 1.0,
+    &quot;mean_context_utilization&quot;: 0.8461538461538461,
+    &quot;mean_attempts&quot;: 1.0,
+    &quot;total_cost_usd&quot;: 0.0
+  },
+  &quot;intervals&quot;: {
+    &quot;accuracy&quot;: [
+      0.5776482949136899,
+      0.9567427368172621
+    ],
+    &quot;refusal_precision&quot;: [
+      0.34237195288961925,
+      1.0
+    ],
+    &quot;refusal_recall&quot;: [
+      0.34237195288961925,
+      1.0
+    ]
+  },
+  &quot;per_category&quot;: {
+    &quot;clause&quot;: {
+      &quot;n&quot;: 5,
+      &quot;passed&quot;: 5,
+      &quot;accuracy&quot;: 1.0,
+      &quot;ci&quot;: [
+        0.5655085052479191,
+        1.0
+      ]
+    },
+    &quot;negation&quot;: {
+      &quot;n&quot;: 1,
+      &quot;passed&quot;: 0,
+      &quot;accuracy&quot;: 0.0,
+      &quot;ci&quot;: [
+        0.0,
+        0.7934567085261071
+      ]
+    },
+    &quot;no_answer&quot;: {
+      &quot;n&quot;: 2,
+      &quot;passed&quot;: 2,
+      &quot;accuracy&quot;: 1.0,
+      &quot;ci&quot;: [
+        0.34237195288961925,
+        1.0
+      ]
+    },
+    &quot;ocr_stress&quot;: {
+      &quot;n&quot;: 1,
+      &quot;passed&quot;: 1,
+      &quot;accuracy&quot;: 1.0,
+      &quot;ci&quot;: [
+        0.20654329147389294,
+        1.0
+      ]
+    },
+    &quot;table&quot;: {
+      &quot;n&quot;: 4,
+      &quot;passed&quot;: 3,
+      &quot;accuracy&quot;: 0.75,
+      &quot;ci&quot;: [
+        0.3006360524426366,
+        0.9544139373553637
+      ]
+    }
+  },
+  &quot;per_item&quot;: [
+    {
+      &quot;qid&quot;: &quot;D1&quot;,
+      &quot;category&quot;: &quot;clause&quot;,
+      &quot;refused&quot;: false,
+      &quot;reason&quot;: null,
+      &quot;answer&quot;: &quot;（未配置生成模型，以下为检索到的证据原文）\n3.1  示例件的额定载荷应大于等于 12.5 kN。 [p.1 §3.1]\n1  范围 本文件规定了示例件的术语、技术要求与验收规则。 本文件适用于示例件的设计、制造与验收。 [p.1 §1]\n3.4  示例件的密封等级应不低于 IP54。 [p.1 §3.4]\n3.3  示例件的工作温度范围为 -20 ℃ ~ 60 ℃。 [p.1 §3.3]\n2  规范性引用文件 Q/EXAMPLE 100—2025  示例件通用要求 Q/EXAMPLE 200—2024  示例件检验方法 [p.1 §2]\n4  验收规则 示例件的检验项目与合格质量水平见表 1&quot;,
+      &quot;attempts&quot;: 1,
+      &quot;n_citations&quot;: 6,
+      &quot;citation_pages&quot;: [
+        1,
+        2
+      ],
+      &quot;gates_passed&quot;: true,
+      &quot;support_score&quot;: 0.923,
+      &quot;checks&quot;: {
+        &quot;citation_validity&quot;: true,
+        &quot;numeric_grounding&quot;: true,
+        &quot;clause_consistency&quot;: true,
+        &quot;sentence_support&quot;: true
+      },
+      &quot;question&quot;: &quot;示例件的额定载荷要求是多少？&quot;,
+      &quot;trace_steps&quot;: [
+        &quot;retrieve&quot;,
+        &quot;draft&quot;,
+        &quot;verify&quot;
+      ],
+      &quot;elapsed_ms&quot;: 4,
+      &quot;est_cost_usd&quot;: 0.0,
+      &quot;missing_facts&quot;: [],
+      &quot;forbidden_hits&quot;: [],
+      &quot;citation_page_ok&quot;: true,
+      &quot;passed&quot;: true,
+      &quot;context_utilization&quot;: 1.0
+    },
+    {
+      &quot;qid&quot;: &quot;D2&quot;,
+      &quot;category&quot;: &quot;clause&quot;,
+      &quot;refused&quot;: false,
+      &quot;reason&quot;: null,
+      &quot;answer&quot;: &quot;（未配置生成模型，以下为检索到的证据原文）\n3.3  示例件的工作温度范围为 -20 ℃ ~ 60 ℃。 [p.1 §3.3]\n1  范围 本文件规定了示例件的术语、技术要求与验收规则。 本文件适用于示例件的设计、制造与验收。 [p.1 §1]\n3.4  示例件的密封等级应不低于 IP54。 [p.1 §3.4]\n3.1  示例件的额定载荷应大于等于 12.5 kN。 [p.1 §3.1]\n4  验收规则 示例件的检验项目与合格质量水平见表 1。 [p.2 §4]\n2  规范性引用文件 Q/EXAMPLE 100—2025  示例件通用要求 Q/EXAMPLE 200—2024  示例件检验方&quot;,
+      &quot;attempts&quot;: 1,
+      &quot;n_citations&quot;: 6,
+      &quot;citation_pages&quot;: [
+        1,
+        2
+      ],
+      &quot;gates_passed&quot;: true,
+      &quot;support_score&quot;: 0.923,
+      &quot;checks&quot;: {
+        &quot;citation_validity&quot;: true,
+        &quot;numeric_grounding&quot;: true,
+        &quot;clause_consistency&quot;: true,
+        &quot;sentence_support&quot;: true
+      },
+      &quot;question&quot;: &quot;示例件的工作温度范围是多少？&quot;,
+      &quot;trace_steps&quot;: [
+        &quot;retrieve&quot;,
+        &quot;draft&quot;,
+        &quot;verify&quot;
+      ],
+      &quot;elapsed_ms&quot;: 1,
+      &quot;est_cost_usd&quot;: 0.0,
+      &quot;missing_facts&quot;: [],
+      &quot;forbidden_hits&quot;: [],
+      &quot;citation_page_ok&quot;: true,
+      &quot;passed&quot;: true,
+      &quot;context_utilization&quot;: 1.0
+    },
+    {
+      &quot;qid&quot;: &quot;D3&quot;,
+      &quot;category&quot;: &quot;clause&quot;,
+      &quot;refused&quot;: false,
+      &quot;reason&quot;: null,
+      &quot;answer&quot;: &quot;（未配置生成模型，以下为检索到的证据原文）\n3.4  示例件的密封等级应不低于 IP54。 [p.1 §3.4]\n1  范围 本文件规定了示例件的术语、技术要求与验收规则。 本文件适用于示例件的设计、制造与验收。 [p.1 §1]\n3.1  示例件的额定载荷应大于等于 12.5 kN。 [p.1 §3.1]\n3.3  示例件的工作温度范围为 -20 ℃ ~ 60 ℃。 [p.1 §3.3]\n2  规范性引用文件 Q/EXAMPLE 100—2025  示例件通用要求 Q/EXAMPLE 200—2024  示例件检验方法 [p.1 §2]\n4  验收规则 示例件的检验项目与合格质量水平见表 1&quot;,
+      &quot;attempts&quot;: 1,
+      &quot;n_citations&quot;: 6,
+      &quot;citation_pages&quot;: [
+        1,
+        2
+      ],
+      &quot;gates_passed&quot;: true,
+      &quot;support_score&quot;: 0.923,
+      &quot;checks&quot;: {
+        &quot;citation_validity&quot;: true,
+        &quot;numeric_grounding&quot;: true,
+        &quot;clause_consistency&quot;: true,
+        &quot;sentence_support&quot;: true
+      },
+      &quot;question&quot;: &quot;示例件的密封等级要求是什么？&quot;,
+      &quot;trace_steps&quot;: [
+        &quot;retrieve&quot;,
+        &quot;draft&quot;,
+        &quot;verify&quot;
+      ],
+      &quot;elapsed_ms&quot;: 1,
+      &quot;est_cost_usd&quot;: 0.0,
+      &quot;missing_facts&quot;: [],
+      &quot;forbidden_hits&quot;: [],
+      &quot;citation_page_ok&quot;: true,
+      &quot;passed&quot;: true,
+      &quot;context_utilization&quot;: 1.0
+    },
+    {
+      &quot;qid&quot;: &quot;D4&quot;,
+      &quot;category&quot;: &quot;clause&quot;,
+      &quot;refused&quot;: false,
+      &quot;reason&quot;: null,
+      &quot;answer&quot;: &quot;（未配置生成模型，以下为检索到的证据原文）\n3.5  当公称直径 d 大于 8 mm 时，壁厚 t 应按 Q/EXAMPLE 100—2025 的规定，d ≤ 20 mm 取 2.0 mm；d &gt; 20 mm 取 3.0 mm。 [p.1 §3.5]\n3.1  示例件的额定载荷应大于等于 12.5 kN。 [p.1 §3.1]\n**表 1  检验项目与合格质量水平 AQL** | 检验项目 | 合格质量水平 AQL | 合格质量水平 AQL | 合格质量水平 AQL | | 检验项目 | 甲型 | 乙型 | 丙型 | |---|---|---|---| | 外径 | 1.0 | 1.0 | 1&quot;,
+      &quot;attempts&quot;: 1,
+      &quot;n_citations&quot;: 4,
+      &quot;citation_pages&quot;: [
+        1,
+        2
+      ],
+      &quot;gates_passed&quot;: true,
+      &quot;support_score&quot;: 0.889,
+      &quot;checks&quot;: {
+        &quot;citation_validity&quot;: true,
+        &quot;numeric_grounding&quot;: true,
+        &quot;clause_consistency&quot;: true,
+        &quot;sentence_support&quot;: true
+      },
+      &quot;question&quot;: &quot;公称直径大于 8 mm 时壁厚如何取值？&quot;,
+      &quot;trace_steps&quot;: [
+        &quot;retrieve&quot;,
+        &quot;draft&quot;,
+        &quot;verify&quot;
+      ],
+      &quot;elapsed_ms&quot;: 1,
+      &quot;est_cost_usd&quot;: 0.0,
+      &quot;missing_facts&quot;: [],
+      &quot;forbidden_hits&quot;: [],
+      &quot;citation_page_ok&quot;: true,
+      &quot;passed&quot;: true,
+      &quot;context_utilization&quot;: 1.0
+    },
+    {
+      &quot;qid&quot;: &quot;D5&quot;,
+      &quot;category&quot;: &quot;clause&quot;,
+      &quot;refused&quot;: false,
+      &quot;reason&quot;: null,
+      &quot;answer&quot;: &quot;（未配置生成模型，以下为检索到的证据原文）\n1  范围 本文件规定了示例件的术语、技术要求与验收规则。 本文件适用于示例件的设计、制造与验收。 [p.1 §1]\n2  规范性引用文件 Q/EXAMPLE 100—2025  示例件通用要求 Q/EXAMPLE 200—2024  示例件检验方法 [p.1 §2]\n3.4  示例件的密封等级应不低于 IP54。 [p.1 §3.4]\n3.3  示例件的工作温度范围为 -20 ℃ ~ 60 ℃。 [p.1 §3.3]\n3.1  示例件的额定载荷应大于等于 12.5 kN。 [p.1 §3.1]\n4  验收规则 示例件的检验项目与合格质量水平见表 1&quot;,
+      &quot;attempts&quot;: 1,
+      &quot;n_citations&quot;: 6,
+      &quot;citation_pages&quot;: [
+        1,
+        2
+      ],
+      &quot;gates_passed&quot;: true,
+      &quot;support_score&quot;: 0.923,
+      &quot;checks&quot;: {
+        &quot;citation_validity&quot;: true,
+        &quot;numeric_grounding&quot;: true,
+        &quot;clause_consistency&quot;: true,
+        &quot;sentence_support&quot;: true
+      },
+      &quot;question&quot;: &quot;本文件的适用范围是什么？&quot;,
+      &quot;trace_steps&quot;: [
+        &quot;retrieve&quot;,
+        &quot;draft&quot;,
+        &quot;verify&quot;
+      ],
+      &quot;elapsed_ms&quot;: 1,
+      &quot;est_cost_usd&quot;: 0.0,
+      &quot;missing_facts&quot;: [],
+      &quot;forbidden_hits&quot;: [],
+      &quot;citation_page_ok&quot;: true,
+      &quot;passed&quot;: true,
+      &quot;context_utilization&quot;: 1.0
+    },
+    {
+      &quot;qid&quot;: &quot;T1&quot;,
+      &quot;category&quot;: &quot;table&quot;,
+      &quot;refused&quot;: false,
+      &quot;reason&quot;: null,
+      &quot;answer&quot;: &quot;（未配置生成模型，以下为检索到的证据原文）\n**表 1  检验项目与合格质量水平 AQL** | 检验项目 | 合格质量水平 AQL | 合格质量水平 AQL | 合格质量水平 AQL | | 检验项目 | 甲型 | 乙型 | 丙型 | |---|---|---|---| | 外径 | 1.0 | 1.0 | 1.5 | | 壁厚 | 2.5 | 2.5 | 2.5 | | 长度 | 4 | — | 4 | | 密封等级 | — | 2.5 | — | [p.2 §表 1]\n4  验收规则 示例件的检验项目与合格质量水平见表 1。 [p.2 §4]\n1  范围 本文件规定了示例件的术语、技术要&quot;,
+      &quot;attempts&quot;: 1,
+      &quot;n_citations&quot;: 6,
+      &quot;citation_pages&quot;: [
+        1,
+        2
+      ],
+      &quot;gates_passed&quot;: true,
+      &quot;support_score&quot;: 0.923,
+      &quot;checks&quot;: {
+        &quot;citation_validity&quot;: true,
+        &quot;numeric_grounding&quot;: true,
+        &quot;clause_consistency&quot;: true,
+        &quot;sentence_support&quot;: true
+      },
+      &quot;question&quot;: &quot;表 1 中乙型的外径 AQL 是多少？&quot;,
+      &quot;trace_steps&quot;: [
+        &quot;retrieve&quot;,
+        &quot;draft&quot;,
+        &quot;verify&quot;
+      ],
+      &quot;elapsed_ms&quot;: 1,
+      &quot;est_cost_usd&quot;: 0.0,
+      &quot;missing_facts&quot;: [],
+      &quot;forbidden_hits&quot;: [
+        &quot;1.5&quot;
+      ],
+      &quot;citation_page_ok&quot;: true,
+      &quot;passed&quot;: false,
+      &quot;context_utilization&quot;: 1.0
+    },
+    {
+      &quot;qid&quot;: &quot;T2&quot;,
+      &quot;category&quot;: &quot;table&quot;,
+      &quot;refused&quot;: false,
+      &quot;reason&quot;: null,
+      &quot;answer&quot;: &quot;（未配置生成模型，以下为检索到的证据原文）\n**表 1  检验项目与合格质量水平 AQL** | 检验项目 | 合格质量水平 AQL | 合格质量水平 AQL | 合格质量水平 AQL | | 检验项目 | 甲型 | 乙型 | 丙型 | |---|---|---|---| | 外径 | 1.0 | 1.0 | 1.5 | | 壁厚 | 2.5 | 2.5 | 2.5 | | 长度 | 4 | — | 4 | | 密封等级 | — | 2.5 | — | [p.2 §表 1]\n4  验收规则 示例件的检验项目与合格质量水平见表 1。 [p.2 §4]\n3.5  当公称直径 d 大于 8 mm 时&quot;,
+      &quot;attempts&quot;: 1,
+      &quot;n_citations&quot;: 6,
+      &quot;citation_pages&quot;: [
+        1,
+        2
+      ],
+      &quot;gates_passed&quot;: true,
+      &quot;support_score&quot;: 0.917,
+      &quot;checks&quot;: {
+        &quot;citation_validity&quot;: true,
+        &quot;numeric_grounding&quot;: true,
+        &quot;clause_consistency&quot;: true,
+        &quot;sentence_support&quot;: true
+      },
+      &quot;question&quot;: &quot;表 1 中乙型的壁厚 AQL 是多少？&quot;,
+      &quot;trace_steps&quot;: [
+        &quot;retrieve&quot;,
+        &quot;draft&quot;,
+        &quot;verify&quot;
+      ],
+      &quot;elapsed_ms&quot;: 1,
+      &quot;est_cost_usd&quot;: 0.0,
+      &quot;missing_facts&quot;: [],
+      &quot;forbidden_hits&quot;: [],
+      &quot;citation_page_ok&quot;: true,
+      &quot;passed&quot;: true,
+      &quot;context_utilization&quot;: 1.0
+    },
+    {
+      &quot;qid&quot;: &quot;T3&quot;,
+      &quot;category&quot;: &quot;table&quot;,
+      &quot;refused&quot;: false,
+      &quot;reason&quot;: null,
+      &quot;answer&quot;: &quot;（未配置生成模型，以下为检索到的证据原文）\n**表 1  检验项目与合格质量水平 AQL** | 检验项目 | 合格质量水平 AQL | 合格质量水平 AQL | 合格质量水平 AQL | | 检验项目 | 甲型 | 乙型 | 丙型 | |---|---|---|---| | 外径 | 1.0 | 1.0 | 1.5 | | 壁厚 | 2.5 | 2.5 | 2.5 | | 长度 | 4 | — | 4 | | 密封等级 | — | 2.5 | — | [p.2 §表 1]\n4  验收规则 示例件的检验项目与合格质量水平见表 1。 [p.2 §4]\n1  范围 本文件规定了示例件的术语、技术要&quot;,
+      &quot;attempts&quot;: 1,
+      &quot;n_citations&quot;: 6,
+      &quot;citation_pages&quot;: [
+        1,
+        2
+      ],
+      &quot;gates_passed&quot;: true,
+      &quot;support_score&quot;: 0.923,
+      &quot;checks&quot;: {
+        &quot;citation_validity&quot;: true,
+        &quot;numeric_grounding&quot;: true,
+        &quot;clause_consistency&quot;: true,
+        &quot;sentence_support&quot;: true
+      },
+      &quot;question&quot;: &quot;表 1 中丙型的长度 AQL 是多少？&quot;,
+      &quot;trace_steps&quot;: [
+        &quot;retrieve&quot;,
+        &quot;draft&quot;,
+        &quot;verify&quot;
+      ],
+      &quot;elapsed_ms&quot;: 1,
+      &quot;est_cost_usd&quot;: 0.0,
+      &quot;missing_facts&quot;: [],
+      &quot;forbidden_hits&quot;: [],
+      &quot;citation_page_ok&quot;: true,
+      &quot;passed&quot;: true,
+      &quot;context_utilization&quot;: 1.0
+    },
+    {
+      &quot;qid&quot;: &quot;T4&quot;,
+      &quot;category&quot;: &quot;table&quot;,
+      &quot;refused&quot;: false,
+      &quot;reason&quot;: null,
+      &quot;answer&quot;: &quot;（未配置生成模型，以下为检索到的证据原文）\n**表 1  检验项目与合格质量水平 AQL** | 检验项目 | 合格质量水平 AQL | 合格质量水平 AQL | 合格质量水平 AQL | | 检验项目 | 甲型 | 乙型 | 丙型 | |---|---|---|---| | 外径 | 1.0 | 1.0 | 1.5 | | 壁厚 | 2.5 | 2.5 | 2.5 | | 长度 | 4 | — | 4 | | 密封等级 | — | 2.5 | — | [p.2 §表 1]\n3.4  示例件的密封等级应不低于 IP54。 [p.1 §3.4]\n4  验收规则 示例件的检验项目与合格质量水平见表&quot;,
+      &quot;attempts&quot;: 1,
+      &quot;n_citations&quot;: 6,
+      &quot;citation_pages&quot;: [
+        1,
+        2
+      ],
+      &quot;gates_passed&quot;: true,
+      &quot;support_score&quot;: 0.923,
+      &quot;checks&quot;: {
+        &quot;citation_validity&quot;: true,
+        &quot;numeric_grounding&quot;: true,
+        &quot;clause_consistency&quot;: true,
+        &quot;sentence_support&quot;: true
+      },
+      &quot;question&quot;: &quot;表 1 中甲型的密封等级 AQL 是多少？&quot;,
+      &quot;trace_steps&quot;: [
+        &quot;retrieve&quot;,
+        &quot;draft&quot;,
+        &quot;verify&quot;
+      ],
+      &quot;elapsed_ms&quot;: 2,
+      &quot;est_cost_usd&quot;: 0.0,
+      &quot;missing_facts&quot;: [],
+      &quot;forbidden_hits&quot;: [],
+      &quot;citation_page_ok&quot;: true,
+      &quot;passed&quot;: true,
+      &quot;context_utilization&quot;: 1.0
+    },
+    {
+      &quot;qid&quot;: &quot;N1&quot;,
+      &quot;category&quot;: &quot;no_answer&quot;,
+      &quot;refused&quot;: true,
+      &quot;reason&quot;: &quot;not_in_document&quot;,
+      &quot;answer&quot;: &quot;&quot;,
+      &quot;attempts&quot;: 1,
+      &quot;n_citations&quot;: 0,
+      &quot;citation_pages&quot;: [],
+      &quot;gates_passed&quot;: true,
+      &quot;support_score&quot;: 0.0,
+      &quot;checks&quot;: {},
+      &quot;question&quot;: &quot;示例件的整机重量是多少？&quot;,
+      &quot;trace_steps&quot;: [
+        &quot;retrieve&quot;,
+        &quot;precheck&quot;
+      ],
+      &quot;elapsed_ms&quot;: 0,
+      &quot;est_cost_usd&quot;: 0.0,
+      &quot;refusal_correct&quot;: true,
+      &quot;reason_correct&quot;: true,
+      &quot;passed&quot;: true,
+      &quot;context_utilization&quot;: 0.0
+    },
+    {
+      &quot;qid&quot;: &quot;N2&quot;,
+      &quot;category&quot;: &quot;no_answer&quot;,
+      &quot;refused&quot;: true,
+      &quot;reason&quot;: &quot;not_in_document&quot;,
+      &quot;answer&quot;: &quot;&quot;,
+      &quot;attempts&quot;: 1,
+      &quot;n_citations&quot;: 0,
+      &quot;citation_pages&quot;: [],
+      &quot;gates_passed&quot;: true,
+      &quot;support_score&quot;: 0.0,
+      &quot;checks&quot;: {},
+      &quot;question&quot;: &quot;示例件的质保期是多久？&quot;,
+      &quot;trace_steps&quot;: [
+        &quot;retrieve&quot;,
+        &quot;precheck&quot;
+      ],
+      &quot;elapsed_ms&quot;: 0,
+      &quot;est_cost_usd&quot;: 0.0,
+      &quot;refusal_correct&quot;: true,
+      &quot;reason_correct&quot;: true,
+      &quot;passed&quot;: true,
+      &quot;context_utilization&quot;: 0.0
+    },
+    {
+      &quot;qid&quot;: &quot;G1&quot;,
+      &quot;category&quot;: &quot;negation&quot;,
+      &quot;refused&quot;: false,
+      &quot;reason&quot;: null,
+      &quot;answer&quot;: &quot;（未配置生成模型，以下为检索到的证据原文）\n1  范围 本文件规定了示例件的术语、技术要求与验收规则。 本文件适用于示例件的设计、制造与验收。 [p.1 §1]\n2  规范性引用文件 Q/EXAMPLE 100—2025  示例件通用要求 Q/EXAMPLE 200—2024  示例件检验方法 [p.1 §2]\n3.4  示例件的密封等级应不低于 IP54。 [p.1 §3.4]\n3.3  示例件的工作温度范围为 -20 ℃ ~ 60 ℃。 [p.1 §3.3]\n3.1  示例件的额定载荷应大于等于 12.5 kN。 [p.1 §3.1]\n4.1  按 Q/EXAMPLE 200—2024 的&quot;,
+      &quot;attempts&quot;: 1,
+      &quot;n_citations&quot;: 6,
+      &quot;citation_pages&quot;: [
+        1,
+        2
+      ],
+      &quot;gates_passed&quot;: true,
+      &quot;support_score&quot;: 0.923,
+      &quot;checks&quot;: {
+        &quot;citation_validity&quot;: true,
+        &quot;numeric_grounding&quot;: true,
+        &quot;clause_consistency&quot;: true,
+        &quot;sentence_support&quot;: true
+      },
+      &quot;question&quot;: &quot;本文件是否规定了示例件的材料牌号？&quot;,
+      &quot;trace_steps&quot;: [
+        &quot;retrieve&quot;,
+        &quot;draft&quot;,
+        &quot;verify&quot;
+      ],
+      &quot;elapsed_ms&quot;: 2,
+      &quot;est_cost_usd&quot;: 0.0,
+      &quot;missing_facts&quot;: [
+        &quot;未规定&quot;
+      ],
+      &quot;forbidden_hits&quot;: [],
+      &quot;citation_page_ok&quot;: true,
+      &quot;passed&quot;: false,
+      &quot;context_utilization&quot;: 1.0
+    },
+    {
+      &quot;qid&quot;: &quot;O1&quot;,
+      &quot;category&quot;: &quot;ocr_stress&quot;,
+      &quot;refused&quot;: false,
+      &quot;reason&quot;: null,
+      &quot;answer&quot;: &quot;（未配置生成模型，以下为检索到的证据原文）\n1  范围 本文件规定了示例件的术语、技术要求与验收规则。 本文件适用于示例件的设计、制造与验收。 [p.1 §1]\n2  规范性引用文件 Q/EXAMPLE 100—2025  示例件通用要求 Q/EXAMPLE 200—2024  示例件检验方法 [p.1 §2]\n示例技术规范 Q/EXAMPLE 001—2026 [p.1 ¶1]&quot;,
+      &quot;attempts&quot;: 1,
+      &quot;n_citations&quot;: 3,
+      &quot;citation_pages&quot;: [
+        1
+      ],
+      &quot;gates_passed&quot;: true,
+      &quot;support_score&quot;: 0.833,
+      &quot;checks&quot;: {
+        &quot;citation_validity&quot;: true,
+        &quot;numeric_grounding&quot;: true,
+        &quot;clause_consistency&quot;: true,
+        &quot;sentence_support&quot;: true
+      },
+      &quot;question&quot;: &quot;本文件引用了哪些规范性文件？&quot;,
+      &quot;trace_steps&quot;: [
+        &quot;retrieve&quot;,
+        &quot;draft&quot;,
+        &quot;verify&quot;
+      ],
+      &quot;elapsed_ms&quot;: 1,
+      &quot;est_cost_usd&quot;: 0.0,
+      &quot;missing_facts&quot;: [],
+      &quot;forbidden_hits&quot;: [],
+      &quot;citation_page_ok&quot;: true,
+      &quot;passed&quot;: true,
+      &quot;context_utilization&quot;: 1.0
+    }
+  ],
+  &quot;ocr&quot;: {
+    &quot;method&quot;: &quot;最佳窗口对齐（参考为节选，OCR 为整页）&quot;,
+    &quot;pages_evaluated&quot;: 2,
+    &quot;pages_not_evaluated&quot;: [],
+    &quot;per_page&quot;: [
+      {
+        &quot;page_no&quot;: 1,
+        &quot;evaluated&quot;: true,
+        &quot;kind&quot;: &quot;text&quot;,
+        &quot;ref_chars&quot;: 230,
+        &quot;cer_normalized&quot;: 0.0043,
+        &quot;cer_strict&quot;: 0.0349,
+        &quot;character_accuracy&quot;: 0.9957,
+        &quot;numeric_field_recall&quot;: 1.0,
+        &quot;missing_numbers&quot;: []
+      },
+      {
+        &quot;page_no&quot;: 2,
+        &quot;evaluated&quot;: true,
+        &quot;kind&quot;: &quot;text&quot;,
+        &quot;ref_chars&quot;: 117,
+        &quot;cer_normalized&quot;: 0.0,
+        &quot;cer_strict&quot;: 0.0395,
+        &quot;character_accuracy&quot;: 1.0,
+        &quot;numeric_field_recall&quot;: 1.0,
+        &quot;missing_numbers&quot;: []
+      }
+    ],
+    &quot;cer_normalized&quot;: 0.0022,
+    &quot;cer_strict&quot;: 0.0372,
+    &quot;character_accuracy&quot;: 0.9979,
+    &quot;numeric_field_recall&quot;: 1.0
+  },
+  &quot;adversarial&quot;: {
+    &quot;total_mutations&quot;: 108,
+    &quot;overall_detection_rate&quot;: 0.6574074074074074,
+    &quot;by_kind&quot;: {
+      &quot;citation&quot;: {
+        &quot;detected&quot;: 11,
+        &quot;total&quot;: 11,
+        &quot;rate&quot;: 1.0,
+        &quot;misses&quot;: []
+      },
+      &quot;clause&quot;: {
+        &quot;detected&quot;: 24,
+        &quot;total&quot;: 40,
+        &quot;rate&quot;: 0.6,
+        &quot;misses&quot;: [
+          &quot;改动了条号&quot;,
+          &quot;改动了条号&quot;,
+          &quot;改动了条号&quot;
+        ]
+      },
+      &quot;fabricate&quot;: {
+        &quot;detected&quot;: 6,
+        &quot;total&quot;: 11,
+        &quot;rate&quot;: 0.545,
+        &quot;misses&quot;: [
+          &quot;凭空添加了一句证据中没有的话&quot;,
+          &quot;凭空添加了一句证据中没有的话&quot;,
+          &quot;凭空添加了一句证据中没有的话&quot;
+        ]
+      },
+      &quot;number&quot;: {
+        &quot;detected&quot;: 28,
+        &quot;total&quot;: 44,
+        &quot;rate&quot;: 0.636,
+        &quot;misses&quot;: [
+          &quot;改动了数值&quot;,
+          &quot;改动了数值&quot;,
+          &quot;改动了数值&quot;
+        ]
+      },
+      &quot;unit&quot;: {
+        &quot;detected&quot;: 2,
+        &quot;total&quot;: 2,
+        &quot;rate&quot;: 1.0,
+        &quot;misses&quot;: []
+      }
+    },
+    &quot;responsibility&quot;: {
+      &quot;number&quot;: &quot;numeric_grounding&quot;,
+      &quot;docid&quot;: &quot;numeric_grounding&quot;,
+      &quot;unit&quot;: &quot;numeric_grounding&quot;,
+      &quot;clause&quot;: &quot;clause_consistency / numeric_grounding&quot;,
+      &quot;citation&quot;: &quot;citation_validity&quot;,
+      &quot;fabricate&quot;: &quot;（无专门机制——纯文字编造需要句级支撑度或人工复核）&quot;
+    }
+  },
+  &quot;noise&quot;: {},
+  &quot;notes&quot;: [
+    &quot;本次运行使用 fixture 引擎，**不是真实 OCR 结果**，不得据此声明 OCR 精度。&quot;,
+    &quot;语料仅 16 个片段，Recall@k / MRR 在如此小的语料上没有统计意义（Recall@1 的随机基线即 1/16）。这里把它当作**管路连通性检查**报告，不作为检索质量证据。&quot;
+  ],
+  &quot;elapsed_s&quot;: 0.02,
+  &quot;manifest&quot;: {
+    &quot;doc_id&quot;: &quot;demo_scan-45536714&quot;,
+    &quot;source&quot;: {
+      &quot;path&quot;: &quot;artifacts\\demo\\demo_scan.pdf&quot;,
+      &quot;sha256&quot;: &quot;4553671404f92a26ddeef31ef6f45c01083ddf93231ee3f87355e4b93e476739&quot;,
+      &quot;page_count&quot;: 2
+    },
+    &quot;domain&quot;: &quot;standard&quot;,
+    &quot;detect&quot;: {
+      &quot;kind&quot;: &quot;SCANNED&quot;,
+      &quot;cross_engine&quot;: {
+        &quot;pdftotext_available&quot;: 1.0,
+        &quot;pdftotext_chars_total&quot;: 0.0,
+        &quot;pymupdf_chars_total&quot;: 0.0
+      },
+      &quot;pages&quot;: [
+        {
+          &quot;page_no&quot;: 1,
+          &quot;kind&quot;: &quot;SCANNED&quot;,
+          &quot;char_count&quot;: 0,
+          &quot;font_resource_count&quot;: 0,
+          &quot;drawn_image_count&quot;: 1,
+          &quot;excluded_tiny_images&quot;: 0,
+          &quot;drawn_image_area_ratio&quot;: 1.0,
+          &quot;native_dpi&quot;: 150.0,
+          &quot;reason&quot;: &quot;无有效文本（0 字符）且图像覆盖 100%，且无任何字体资源&quot;,
+          &quot;signals&quot;: [
+            {
+              &quot;name&quot;: &quot;pymupdf_chars&quot;,
+              &quot;value&quot;: 0,
+              &quot;threshold&quot;: 10,
+              &quot;passed&quot;: false,
+              &quot;detail&quot;: &quot;PyMuPDF 抽出 0 个有效字符（阈值 10）&quot;,
+              &quot;source&quot;: &quot;pymupdf&quot;
+            },
+            {
+              &quot;name&quot;: &quot;pdftotext_chars&quot;,
+              &quot;value&quot;: 0,
+              &quot;threshold&quot;: 10,
+              &quot;passed&quot;: false,
+              &quot;detail&quot;: &quot;pdftotext 独立抽出 0 个有效字符&quot;,
+              &quot;source&quot;: &quot;pdftotext&quot;
+            },
+            {
+              &quot;name&quot;: &quot;font_resources&quot;,
+              &quot;value&quot;: 0,
+              &quot;threshold&quot;: 1,
+              &quot;passed&quot;: false,
+              &quot;detail&quot;: &quot;页面引用 0 个字体资源；0 表示文字只能是图像像素&quot;,
+              &quot;source&quot;: &quot;pymupdf&quot;
+            },
+            {
+              &quot;name&quot;: &quot;drawn_image_area_ratio&quot;,
+              &quot;value&quot;: 1.0,
+              &quot;threshold&quot;: 0.5,
+              &quot;passed&quot;: true,
+              &quot;detail&quot;: &quot;绘制图像占页面面积 100.0%（1 张有效图，已排除 0 张小于 1024px² 的干扰图）&quot;,
+              &quot;source&quot;: &quot;pymupdf.display_list&quot;
+            },
+            {
+              &quot;name&quot;: &quot;garbled_text_layer&quot;,
+              &quot;value&quot;: 0.0,
+              &quot;threshold&quot;: 0.04,
+              &quot;passed&quot;: true,
+              &quot;detail&quot;: &quot;粘连 token 占比 0.00%，替换字符占比 0.00%&quot;,
+              &quot;source&quot;: &quot;pymupdf&quot;
+            }
+          ]
+        },
+        {
+          &quot;page_no&quot;: 2,
+          &quot;kind&quot;: &quot;SCANNED&quot;,
+          &quot;char_count&quot;: 0,
+          &quot;font_resource_count&quot;: 0,
+          &quot;drawn_image_count&quot;: 1,
+          &quot;excluded_tiny_images&quot;: 0,
+          &quot;drawn_image_area_ratio&quot;: 1.0,
+          &quot;native_dpi&quot;: 150.0,
+          &quot;reason&quot;: &quot;无有效文本（0 字符）且图像覆盖 100%，且无任何字体资源&quot;,
+          &quot;signals&quot;: [
+            {
+              &quot;name&quot;: &quot;pymupdf_chars&quot;,
+              &quot;value&quot;: 0,
+              &quot;threshold&quot;: 10,
+              &quot;passed&quot;: false,
+              &quot;detail&quot;: &quot;PyMuPDF 抽出 0 个有效字符（阈值 10）&quot;,
+              &quot;source&quot;: &quot;pymupdf&quot;
+            },
+            {
+              &quot;name&quot;: &quot;pdftotext_chars&quot;,
+              &quot;value&quot;: 0,
+              &quot;threshold&quot;: 10,
+              &quot;passed&quot;: false,
+              &quot;detail&quot;: &quot;pdftotext 独立抽出 0 个有效字符&quot;,
+              &quot;source&quot;: &quot;pdftotext&quot;
+            },
+            {
+              &quot;name&quot;: &quot;font_resources&quot;,
+              &quot;value&quot;: 0,
+              &quot;threshold&quot;: 1,
+              &quot;passed&quot;: false,
+              &quot;detail&quot;: &quot;页面引用 0 个字体资源；0 表示文字只能是图像像素&quot;,
+              &quot;source&quot;: &quot;pymupdf&quot;
+            },
+            {
+              &quot;name&quot;: &quot;drawn_image_area_ratio&quot;,
+              &quot;value&quot;: 1.0,
+              &quot;threshold&quot;: 0.5,
+              &quot;passed&quot;: true,
+              &quot;detail&quot;: &quot;绘制图像占页面面积 100.0%（1 张有效图，已排除 0 张小于 1024px² 的干扰图）&quot;,
+              &quot;source&quot;: &quot;pymupdf.display_list&quot;
+            },
+            {
+              &quot;name&quot;: &quot;garbled_text_layer&quot;,
+              &quot;value&quot;</pre></details><footer>
+由 <code>docqa eval</code> 生成。所有指标均为确定性实现，不依赖评委模型；
+每个比例附 Wilson 95% 置信区间与样本量。
+</footer></div></body></html>

@@ -62,14 +62,22 @@ class QaAgent:
         cfg: Config,
         profile: DomainProfile,
         *,
-        failed_pages: set[int] | None = None,
+        failed_pages: set[int] | set[tuple[str, int]] | None = None,
         doc_id: str = "",
     ):
         self.index = index
         self.provider = provider
         self.cfg = cfg
         self.profile = profile
-        self.failed_pages = failed_pages or set()
+        # 归一成 **(doc_id, page_no) 元组**这一种形态。
+        #
+        # 调用方给裸页码（单文档场景，也是更自然的写法），内部补上 doc_id；
+        # 已经是元组的（多文档场景）原样保留。
+        # 统一成元组是因为多文档下**不同文档的同一页码是两回事**——
+        # 只比页码会让 A 文档的失败页误伤 B 文档的证据。
+        self.failed_pages = {
+            f if isinstance(f, tuple) else (doc_id, f) for f in (failed_pages or set())
+        }
         self.doc_id = doc_id
         # 文档里真实存在的条号，供条号一致性检查区分"条号"与"数据值"
         self._known_clause_labels = {

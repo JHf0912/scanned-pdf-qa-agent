@@ -187,14 +187,48 @@ def table_cell_accuracy(expected: list[list[str]], actual: list[list[str]]) -> d
 _NUM_FIELD_RE = re.compile(r"[±+\-]?\d+(?:[.:/]\d+)*\s*(?:MPa|mm|%)?", re.IGNORECASE)
 
 
+def _normalize_keep_breaks(text: str) -> str:
+    """数值提取专用的归一化：繁简统一 + 全角转半角 + 折叠空白，**但保留换行**。
+
+    为什么不直接用 `normalize_for_cer`
+    ----------------------------------
+    它用 `re.sub(r"\\s+", "", ...)` 把**换行也压掉了**。对 CER 来说这是对的
+    （比对时不该被换行影响），但对**数值提取**是灾难：
+
+    - 跨行：`… Q/EXAMPLE 001—2026` 换行后接 `1  范围`，
+      压完变成 `001—20261`，正则把 `20261` 当成**一个**数——
+      于是参考里的 `1` 被报成"漏掉"，结果里多出一个 `20261`；
+    - 同行：`1.0  1.0  1.5` 压成 `1.01.01.5`，而正则的小数部分允许 `.`，
+      整串被吃成**一个**数。
+
+    两种情况下，召回率都会被无端拉低——而它看起来只是个"识别得不准"的数字，
+    不会有人怀疑是度量本身错了。
+
+    保留空白与换行后，数字之间的边界就还在，同时也还能捕获随后的单位
+    （`590 MPa` 仍是一个完整字段）。
+    """
+    if not text:
+        return ""
+    out = unicodedata.normalize("NFKC", text)
+    try:
+        from zhconv import convert
+
+        out = convert(out, "zh-cn")
+    except ImportError:  # pragma: no cover - 依赖在 eval extra 里
+        pass
+    return re.sub(r"[^\S\n]+", " ", out)
+
+
 def numeric_field_accuracy(reference: str, hypothesis: str) -> dict:
     """数值字段准确率：参考文本里出现的每个数值，是否在结果中原样出现。
 
     这是比 CER 更贴近业务的一层——一个字符之差（1.0 与 1.5）
     在 CER 上只值 1/50，在业务上却是"完全错误的答案"。
     """
-    ref_nums = {m.group(0).strip() for m in _NUM_FIELD_RE.finditer(normalize_for_cer(reference))}
-    hyp_nums = {m.group(0).strip() for m in _NUM_FIELD_RE.finditer(normalize_for_cer(hypothesis))}
+    ref_nums = {m.group(0).strip()
+                for m in _NUM_FIELD_RE.finditer(_normalize_keep_breaks(reference))}
+    hyp_nums = {m.group(0).strip()
+                for m in _NUM_FIELD_RE.finditer(_normalize_keep_breaks(hypothesis))}
     if not ref_nums:
         return {"field_recall": 1.0, "field_precision": 1.0, "missing": [], "spurious": []}
     missing = sorted(ref_nums - hyp_nums)

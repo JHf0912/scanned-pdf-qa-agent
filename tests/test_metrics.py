@@ -115,3 +115,38 @@ class TestNumericField:
     def test_spurious_number_reported(self):
         r = numeric_field_accuracy("强度 590 MPa。", "强度 590 MPa，另有 999 项。")
         assert 999 == int(r["spurious"][0].rstrip("项")) or r["spurious"]
+
+
+class TestNumericFieldAcrossLines:
+    """**回归**：数字不能被换行/空白粘成一个。
+
+    原先数值提取跑在 `normalize_for_cer` 的结果上，而它把换行也压掉了：
+
+    - 跨行：`…001—2026` + `1  范围` → `00120261`，被当成一个数，
+      于是参考里的 `1` 报"漏掉"、结果里多出一个 `20261`；
+    - 同行：`1.0  1.0  1.5` → `1.01.01.5`，因小数部分允许 `.` 被整串吃掉。
+
+    两种情况下召回率都被无端拉低，而它看起来只像"识别得不准"。
+    """
+
+    def test_numbers_on_separate_lines_are_not_glued(self):
+        ref = "1  范围\n本文件规定了示例件的术语。"
+        hyp = "示例技术规范\nQ/EXAMPLE 001—2026\n1  范围\n本文件规定了示例件的术语。"
+        r = numeric_field_accuracy(ref, hyp)
+        assert r["field_recall"] == 1.0, f"跨行数字被粘连：漏 {r['missing']}、多 {r['spurious']}"
+
+    def test_numbers_on_one_line_are_separated(self):
+        ref = "外径 1.0 1.0 1.5"
+        assert numeric_field_accuracy(ref, ref)["field_recall"] == 1.0
+
+    def test_unit_still_captured_with_the_number(self):
+        """修完粘连带后仍要能带着单位——`590 MPa` 是一个完整字段。"""
+        r = numeric_field_accuracy("强度 590 MPa。", "强度 950 MPa。")
+        assert any("590" in m for m in r["missing"])
+
+    def test_partial_loss_is_still_detected(self):
+        """不能矫枉过正：真的漏了数字还是要报出来。"""
+        ref = "外径 1.0 1.0 1.5"
+        r = numeric_field_accuracy(ref, "外径 1.0 1.0")
+        assert r["field_recall"] < 1.0
+        assert "1.5" in r["missing"]

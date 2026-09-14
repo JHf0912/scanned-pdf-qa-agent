@@ -83,10 +83,54 @@ def split_sentences(text: str) -> list[str]:
     return parts
 
 
+def _running_furniture(pages: list[OcrPage]) -> set[str]:
+    """找出**跨页重复出现**的页眉/页脚文本（归一化后）。
+
+    为什么不能一律丢掉
+    ------------------
+    "页眉页脚是版面噪声"这个判断，对**重复出现**的页眉页脚成立
+    （书名、页码、文件编号）。但对**封面**不成立：封面底部恰恰是
+    发布/实施日期、发布机构这类正式元数据——而它们正是会被问到的东西。
+
+    实测踩到过：GB/T 的封面把 `2008-09-22 发布` / `2009-05-01 实施`
+    判成了 `footer`，切分时被整块丢掉。于是"发布日期是哪天"这个问题
+    在检索里**永远找不到证据**，只能拒答成"文档里没有"——
+    识别明明是对的，是切分把证据丢了，而表面上看起来像"文档没写"。
+
+    判据因此改成**是否重复**：只有跨页重复出现的才算版面噪声。
+    这也正是 "running header/footer" 本来的定义。
+    """
+    seen: dict[str, set[int]] = {}
+    for page in pages:
+        for b in page.blocks:
+            if b.type in ("header", "footer"):
+                seen.setdefault(_norm_furniture(b.text), set()).add(page.page_no)
+    return {text for text, pageset in seen.items() if len(pageset) >= 2}
+
+
+def _norm_furniture(text: str) -> str:
+    """归一化以判断"是不是同一段页眉页脚"。
+
+    只压空白、去首尾——**故意不做繁简/全角归一**：这里判的是"两页上是不是
+    同一段文字"，宽松到把不同内容算成相同，会让本该保留的内容被丢掉。
+    宁可少丢，不可错丢。
+    """
+    return "".join((text or "").split())
+
+
+def _is_running(text: str, running: set[str]) -> bool:
+    return _norm_furniture(text) in running
+
+
 def _blocks_to_sections(
-    blocks: list[OcrBlock], patterns: list[re.Pattern[str]]
+    blocks: list[OcrBlock], patterns: list[re.Pattern[str]],
+    running: set[str] | None = None,
 ) -> tuple[list[_Section], bool]:
     """把块序列归并成结构单元。
+
+    Args:
+        running: **跨页重复出现**的页眉/页脚文本（见 `_running_furniture`）。
+            只有落在里面的才丢弃；一次性的页眉页脚是内容，要留着。
 
     Returns:
         (单元列表, 是否真的识别到了结构)。第二个返回值驱动退化决策。
@@ -129,8 +173,8 @@ def _blocks_to_sections(
             )
             continue
 
-        if block.type in ("header", "footer"):
-            continue  # 页眉页脚是版面噪声，不进检索
+        if block.type in ("header", "footer") and _is_running(block.text, running):
+            continue  # 跨页重复出现的才是版面噪声，不进检索
 
         # 条号有两个来源，**两个都要认**：
         #
@@ -239,7 +283,9 @@ def chunk_document(
     patterns = _compile_patterns(profile)
 
     all_blocks: list[OcrBlock] = [b for p in pages for b in p.blocks]
-    sections, structured = _blocks_to_sections(all_blocks, patterns)
+    sections, structured = _blocks_to_sections(
+        all_blocks, patterns, _running_furniture(pages)
+    )
 
     chunks: list[Chunk] = []
     ordinal = 0
@@ -282,11 +328,15 @@ def chunk_document(
         used_fallback = True
         ordinal = 0
         chunks = []
+        # 退化路径同样只丢**跨页重复**的页眉页脚——理由与主路径一致
+        # （见 `_running_furniture`）。两处判据必须用同一个 `running` 集，
+        # 否则同一份文档走哪条路径会得到不同的正文，而这件事完全不可见。
+        running = _running_furniture(pages)
         for page in sorted(pages, key=lambda p: p.page_no):
             body = "\n".join(
                 b.text
                 for b in sorted(page.blocks, key=lambda b: b.order)
-                if b.type not in ("header", "footer")
+                if not (b.type in ("header", "footer") and _is_running(b.text, running))
             )
             if not body.strip():
                 continue

@@ -163,3 +163,34 @@ def test_logging_module_has_no_masking_layer():
             f"logging.py 不应包含 {banned}——"
             f"密钥不该写进日志，而不是写进去再擦掉"
         )
+
+
+# ---------------------------------------------------------------- 文档内容
+
+def test_parse_json_failure_does_not_echo_model_output(logging_to_stderr, capsys, monkeypatch):
+    """**回归**：JSON 解析失败时不得把模型输出回显进日志。
+
+    OCR 场景下模型输出**就是文档正文的转录**。原先这条路径回显 500 字符，
+    等于把半页文档写进日志——而这个异常还会被 vlm / pipeline / with_retry
+    三处各截一段再打一次。
+
+    HTTP 层早就做对了（`classify_status` 特意注明"不回显响应体"），
+    这条路径漏了；而原来的哨兵测试只走 HTTP 状态码分支，**覆盖不到它**。
+    """
+    from docqa.llm.base import LLMResponse
+
+    # 用一段独特到不可能巧合出现的"文档正文"充当模型输出
+    doc_text = "机密文档正文：本页记载了绝不应出现在日志里的内容-7f3a9c"
+    resp = LLMResponse(text=doc_text, provider="t", model="t")
+
+    with pytest.raises(DocqaError) as ei:
+        resp.parse_json()
+
+    msg = str(ei.value)
+    assert doc_text not in msg, "异常消息里回显了模型输出（即文档正文）"
+    assert "机密文档正文" not in msg
+    assert doc_text not in _captured(capsys), "日志里出现了文档正文"
+    # 但仍要给出可判断的信息：长度 + 形态 + 摘要哈希
+    assert str(len(doc_text)) in msg, "应报出长度"
+    assert "形态" in msg and "摘要" in msg, "应报出形态与摘要哈希"
+    assert "不含 { 的文本" in msg, "应能看出它根本不是 JSON"

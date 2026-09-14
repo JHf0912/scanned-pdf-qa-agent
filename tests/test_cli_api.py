@@ -19,6 +19,7 @@ from typer.testing import CliRunner
 from docqa.api.app import create_app
 from docqa.cli import app
 from docqa.config import load_config
+from docqa.ocr.fixture import FixtureOcrEngine
 
 runner = CliRunner()
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -73,17 +74,31 @@ class TestWebApi:
     def test_empty_question_rejected(self, client):
         assert client.post("/api/ask", json={"question": "   "}).status_code == 400
 
-    def test_answer_matches_cli_path(self):
-        """API 与 CLI 必须给出同一个答案——它们共用同一个 AnswerBundle。"""
-        cfg = load_config()
-        base = cfg.cache_dir.parent
-        docs = [
-            p for p in base.iterdir()
-            if p.is_dir() and (p / "manifest.json").exists()
-        ] if base.exists() else []
-        if not docs:
-            pytest.skip("尚未 ingest 任何文档")
-        doc = max(docs, key=lambda p: p.stat().st_mtime)
+    def test_answer_matches_cli_path(self, tmp_path: Path):
+        """API 与 CLI 必须给出同一个答案——它们共用同一个 AnswerBundle。
+
+        **必须自备产物，不能读 `data/derived/` 的环境状态。**
+        原实现取"目录 mtime 最新的那一份"，而 API 与测试各自算一次；
+        只要有人重跑过任意一份 ingest，两边的选择就可能不同——
+        于是这条"两条路径答案一致"的断言会**因为选错了文档而失败**，
+        与它想验证的事情毫无关系。改成两边都指向同一个显式产物。
+        """
+        import dataclasses
+
+        from docqa.pipeline import ingest
+
+        # 往独立的根目录 ingest 一份，让 API 的"最新产物"只能是它
+        isolated = tmp_path / "derived"
+        ingest(
+            PROJECT_ROOT / "artifacts" / "demo" / "demo_scan.pdf",
+            cfg=load_config(), domain="standard",
+            engine=FixtureOcrEngine(PROJECT_ROOT / "artifacts" / "demo" / "ocr"),
+            out_root=isolated,
+        )
+        doc = next(p for p in isolated.iterdir() if (p / "manifest.json").exists())
+
+        # API 侧的"最新产物"由 cfg.cache_dir.parent 决定，指到隔离目录即可
+        cfg = dataclasses.replace(load_config(), cache_dir=isolated / "cache")
 
         q = "示例件的额定载荷要求是多少？"
         api = TestClient(create_app(cfg, domain="standard")).post(
@@ -92,7 +107,11 @@ class TestWebApi:
         cli = runner.invoke(app, ["ask", q, "--doc", str(doc), "--json"])
         assert cli.exit_code == 0, cli.output
         cli_bundle = json.loads(cli.output[cli.output.index("{"):])
-        assert api["refused"] == cli_bundle["refused"]
+        assert api["refused"] == cli_bundle["refused"], (
+            f"同一条链路给出不同结论：api.refused={api['refused']} "
+            f"cli.refused={cli_bundle['refused']}"
+        )
+        assert api["answer"] == cli_bundle["answer"]
         assert api["answer"] == cli_bundle["answer"]
 
 

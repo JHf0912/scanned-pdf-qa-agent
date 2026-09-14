@@ -92,13 +92,33 @@ def question_terms(question: str) -> set[str]:
     return terms
 
 
+# 问"日期"的问法。答案在原文里往往是**日期字面量**（`2008-09-22 发布`），
+# 词面上根本不会出现"日期"二字。
+_DATE_ASKING = frozenset({"哪天", "日期", "什么时候", "何时", "年月日", "几号"})
+
+# `normalize()` 已把各类破折号统一成 `-`，所以这里只需要认 `-` 与"年月"两种写法。
+_DATE_LITERAL_RE = re.compile(r"\d{4}-\d{1,2}-\d{1,2}|\d{4}年\d{1,2}月")
+
+
 def _term_covered(term: str, haystack: str) -> bool:
     """某个实词是否出现在文本里（含形态变化的宽松匹配）。"""
     t = normalize(term)
     if t in haystack:
         return True
-    # 形态变化：问"适用范围"，原文写的是"适用于"。整词匹配会漏，
-    # 于是覆盖率被读成 0、一个完全可答的问题被判成"文档未涵盖"。
+    # **答案的形态与提问的措辞本来就不必一致。** 这条判据要认得这一点，
+    # 否则会把完全可答的问题判成"文档未涵盖"。已知的两种：
+    #
+    # 1. 形态变化：问"适用范围"，原文写的是"适用于"——整词匹配会漏；
+    # 2. 换了表达：问"发布日期是哪天/日期"，原文写的是"2008-09-22 发布"，
+    #    字面上没有"日期"二字。语料里这类"问法 ≠ 写法"的落差很常见
+    #    （问"多少人"答"3 名"、问"多长"答"12 mm"），
+    #    纯词面匹配遇到它们就误判成缺证据。
+    #
+    # 第 2 条只对**日期问法**开了一条窄路：仅当文本里确实存在日期字面量时才认。
+    # 不把它做成通用的"数字→数量词"映射，是因为那会让覆盖率对任何含数字的
+    # 文本都虚高，等于把这道闸门拆掉。
+    if t in _DATE_ASKING and _DATE_LITERAL_RE.search(haystack):
+        return True
     # 退一步用词首二字判断——对 3 字以上的实词，这两个字已足够 specific。
     return len(t) >= 3 and t[:2] in haystack
 
@@ -264,7 +284,7 @@ def decide(
     gates_passed: bool,
     failed_gate_names: list[str],
     evidence_chunks: list[Chunk],
-    failed_pages: set[int],
+    failed_pages: set[tuple[str, int]],
     candidates: list[ClarificationOption],
     coverage: float = 1.0,
     existence_question: bool = False,
@@ -277,7 +297,14 @@ def decide(
     顺序反了会把明确的问题报成模糊的问题。
     """
     # 1) 证据触及识别失败的页 —— 我们根本不知道那页写了什么
-    bad_pages = sorted({c.page_no for c in evidence_chunks} & failed_pages)
+    #
+    # **必须按 (doc_id, page_no) 比对，不能只比页码。**
+    # 多文档检索时，不同文档的第 3 页是两回事：A 文档第 3 页识别失败、
+    # B 文档第 3 页好好的，只比页码会让 B 的证据**误触发一次拒答**。
+    # 拒答本身是安全侧的，但误拒答会让人不再信任拒答。
+    bad_pages = sorted(
+        c.page_no for c in evidence_chunks if (c.doc_id, c.page_no) in failed_pages
+    )
     if bad_pages:
         return Decision(
             refused=True,

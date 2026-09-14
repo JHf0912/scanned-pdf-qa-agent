@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from docqa.chunker import chunk_document, split_sentences
+from conftest import make_block, make_page
 
 
 class TestStructuredChunking:
@@ -66,3 +67,60 @@ class TestSentenceSplit:
 
     def test_empty_input(self):
         assert split_sentences("") == []
+
+
+class TestHeaderFooterFurniture:
+    """**回归**：只有**跨页重复**的页眉页脚才算版面噪声。
+
+    原先一律丢弃。那对重复出现的书名/页码是对的，对**封面**是错的——
+    封面底部恰恰是发布/实施日期、发布机构这类正式元数据。
+
+    实测踩到过：GB/T 封面把 `2008-09-22 发布` / `2009-05-01 实施` 判成
+    `footer`，切分时整块丢掉。于是"发布日期是哪天"这个问题在检索里
+    **永远找不到证据**，只能拒答成"文档里没有"——识别明明是对的，
+    是切分把证据丢了，而表面上看起来像"文档没写"。
+    """
+
+    def test_one_off_footer_is_kept(self, standard_profile):
+        """只在一页上出现的 footer 是**内容**，必须留下。"""
+        page = make_page([
+            make_block(0, "clause", "1 范围", "1"),
+            make_block(1, "paragraph", "本文件规定了示例件的要求。"),
+            make_block(2, "footer", "2008-09-22 发布"),
+        ])
+        chunks, _ = chunk_document([page], "d", standard_profile)
+        assert any("2008-09-22" in c.text for c in chunks), (
+            "一次性的 footer 被当成版面噪声丢掉了——封面的发布/实施日期就是这样丢的"
+        )
+
+    def test_repeated_footer_is_dropped(self, standard_profile):
+        """跨页重复出现的才是版面噪声，仍然要丢。"""
+        pages = [
+            make_page([make_block(0, "clause", "1 范围", "1"),
+                       make_block(1, "paragraph", "正文甲。"),
+                       make_block(2, "footer", "GB/T 1568—2008")], page_no=1),
+            make_page([make_block(0, "clause", "2 引用", "2"),
+                       make_block(1, "paragraph", "正文乙。"),
+                       make_block(2, "footer", "GB/T 1568—2008")], page_no=2),
+        ]
+        chunks, _ = chunk_document(pages, "d", standard_profile)
+        # 页码式的页眉页脚不该进检索；它出现在每一页，没有检索价值
+        assert not any(c.text.strip() == "GB/T 1568—2008" for c in chunks)
+
+    def test_repeated_header_dropped_but_distinct_one_kept(self, standard_profile):
+        """同一页里：重复的丢、独有的留。判据是**是否重复**，不是类型。"""
+        pages = [
+            make_page([make_block(0, "header", "某某标准"),
+                       make_block(1, "clause", "1 范围", "1"),
+                       make_block(2, "paragraph", "正文甲。"),
+                       make_block(3, "footer", "2008-09-22 发布")], page_no=1),
+            make_page([make_block(0, "header", "某某标准"),
+                       make_block(1, "clause", "2 引用", "2"),
+                       make_block(2, "paragraph", "正文乙。"),
+                       make_block(3, "footer", "1997-05-01 实施")], page_no=2),
+        ]
+        chunks, _ = chunk_document(pages, "d", standard_profile)
+        joined = "\n".join(c.text for c in chunks)
+        assert "某某标准" not in joined, "跨页重复的页眉应当被丢弃"
+        assert "2008-09-22 发布" in joined, "只在第 1 页出现的页脚应当保留"
+        assert "1997-05-01 实施" in joined, "只在第 2 页出现的页脚应当保留"

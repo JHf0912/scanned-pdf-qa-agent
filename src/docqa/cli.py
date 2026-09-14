@@ -23,6 +23,7 @@ import typer
 from rich.console import Console
 from rich.panel import Panel
 from rich.table import Table
+from rich.text import Text
 
 from .config import PROJECT_ROOT, Config, load_config, load_domain, missing_ocr_message
 from .detect import pages_needing_ocr, profile_pdf
@@ -61,7 +62,11 @@ def _report_error(exc: DocqaError) -> None:
 
     所以打印归打印、退出归调用方，两件事不要混在一个函数里。
     """
-    console.print(Panel(str(exc), title="[red]错误[/red]", border_style="red"))
+    # 用 Text 包住：`str(exc)` 可能含第三方返回的内容，
+    # 而 Rich 会把方括号当 markup 标签——轻则吞掉（引用标记 `[p.1 §3.1]` 就是这样
+    # 在 CLI 里整列变空的），重则遇到不平衡标签 `[/]` 直接抛 MarkupError，
+    # 让精心写的可操作报错退化成 traceback。
+    console.print(Panel(Text(str(exc)), title="[red]错误[/red]", border_style="red"))
 
 
 def _fail(exc: DocqaError) -> None:
@@ -102,8 +107,20 @@ def doctor(
               cfg.ocr.describe())
     t.add_row("生成端点", "[green]已配置[/green]" if cfg.has_llm else "[yellow]未配置[/yellow]",
               cfg.llm.describe() + ("" if cfg.has_llm else "（将降级为抽取式回答）"))
-    t.add_row("第二 OCR 引擎", "[green]已配置[/green]" if cfg.has_ocr2 else "[dim]未配置[/dim]",
-              cfg.ocr2.describe() + ("" if cfg.has_ocr2 else "（跳过跨引擎校验）"))
+    # 第二引擎是否**真的能**做跨引擎校验，取决于它跟主引擎是否同一个模型。
+    # 同一个模型对同一页图会给出高度一致的输出，比对必然通过——
+    # 那是"永远不会失败的检查"，报"已配置"会让人误以为这一路有保障。
+    if not cfg.has_ocr2:
+        t.add_row("第二 OCR 引擎", "[dim]未配置[/dim]",
+                  "跨引擎一致性校验**不会运行**——这一路没有保障，不是没有问题")
+    elif (cfg.ocr2.model or "") == (cfg.ocr.model or "") and \
+            (cfg.ocr2.base_url or "") == (cfg.ocr.base_url or ""):
+        t.add_row("第二 OCR 引擎", "[yellow]形同虚设[/yellow]",
+                  f"{cfg.ocr2.describe()}——与主引擎**同模型同端点**，"
+                  f"比对必然一致，该校验会被跳过")
+    else:
+        t.add_row("第二 OCR 引擎", "[green]已配置[/green]",
+                  f"{cfg.ocr2.describe()}（跨引擎校验生效，每页多识别一次，成本翻倍）")
 
     console.print(t)
 
@@ -331,7 +348,39 @@ def ingest(
     try:
         ocr_engine = build_engine(engine, cfg, fixtures_dir=fixtures_dir) if engine != "vlm" \
             else build_engine("vlm", cfg)
-        result = run_ingest(pdf, cfg=cfg, domain=domain, engine=ocr_engine, out_root=out)
+
+        # 第二引擎：配了就跑跨引擎一致性校验。
+        #
+        # **有一个陷阱必须挡住**：如果第二引擎用的是同一个模型，
+        # 两次识别会高度一致，比对必然"通过"——那是个**永远不会失败的检查**，
+        # 比不做检查更糟，因为它会让人以为这一路已经有保障了。
+        # 这里检测到同模型就拒绝启用，而不是让它静静地空转。
+        ocr_engine2 = None
+        if cfg.has_ocr2:
+            same_model = (cfg.ocr2.model or "") == (cfg.ocr.model or "")
+            same_endpoint = (cfg.ocr2.base_url or "") == (cfg.ocr.base_url or "")
+            if same_model and same_endpoint:
+                console.print(Panel(
+                    "[yellow]第二 OCR 引擎与主引擎是同一个模型、同一个端点，"
+                    "跨引擎校验已跳过。[/yellow]\n"
+                    "同一模型对同一页图会给出高度一致的输出，比对必然通过——\n"
+                    "那是**一个永远不会失败的检查**，比不做更危险，"
+                    "因为它会让人误以为这一路已有保障。\n"
+                    "请把 DOCQA_OCR2_MODEL / DOCQA_OCR2_BASE_URL 指向**另一个模型**，"
+                    "或删掉 DOCQA_OCR2_* 明确表示不做该校验。",
+                    title="跨引擎校验未启用", border_style="yellow",
+                ))
+            else:
+                ocr_engine2 = build_engine("vlm", cfg, provider_cfg=cfg.ocr2)
+                console.print(
+                    f"跨引擎校验：[green]已启用[/green]"
+                    f"（{cfg.ocr.model} ↔ {cfg.ocr2.model}，每页再识别一次，成本翻倍）"
+                )
+
+        result = run_ingest(
+            pdf, cfg=cfg, domain=domain,
+            engine=ocr_engine, engine2=ocr_engine2, out_root=out,
+        )
     except DocqaError as exc:
         _fail(exc)
         return
@@ -373,10 +422,11 @@ def _print_bundle(bundle: AnswerBundle) -> None:
             t.add_column("取值")
             t.add_column("出处")
             for i, c in enumerate(bundle.candidates, start=1):
-                t.add_row(str(i), c.interpretation, c.value, c.citation.render())
+                t.add_row(str(i), Text(c.interpretation), Text(c.value), Text(c.citation.render()))
             console.print(t)
     else:
-        console.print(Panel(bundle.answer or "", title="答案", border_style="green"))
+        # 无模型降级时 answer 就是 OCR 出来的**文档原文**，同样不能过 markup 解析
+        console.print(Panel(Text(bundle.answer or ""), title="答案", border_style="green"))
 
     if bundle.citations:
         t = Table(title="引用来源", show_header=True, header_style="bold")
@@ -384,7 +434,7 @@ def _print_bundle(bundle: AnswerBundle) -> None:
         t.add_column("chunk")
         t.add_column("证据片段", overflow="fold")
         for c in bundle.citations:
-            t.add_row(c.render(), c.chunk_id, c.quote[:120])
+            t.add_row(Text(c.render()), Text(c.chunk_id), Text(c.quote[:120]))
         console.print(t)
 
     v = bundle.verification
@@ -394,8 +444,9 @@ def _print_bundle(bundle: AnswerBundle) -> None:
     t.add_column("结果")
     t.add_column("说明", overflow="fold")
     for c in v.checks:
-        t.add_row(c.name, c.severity.value,
-                  "[green]通过[/green]" if c.passed else "[red]未通过[/red]", c.detail)
+        t.add_row(Text(c.name), Text(c.severity.value),
+                  "[green]通过[/green]" if c.passed else "[red]未通过[/red]",
+                  Text(c.detail))
     console.print(t)
     console.print(f"句级支撑度（咨询性，不作放行判定）：{v.support_score:.2f}")
 
@@ -409,14 +460,18 @@ def _print_bundle(bundle: AnswerBundle) -> None:
 @app.command()
 def ask(
     question: str = typer.Argument(..., help="你的问题"),
-    doc: Path | None = typer.Option(None, "--doc", help="ingest 产物目录"),
+    doc: list[Path] | None = typer.Option(
+        None, "--doc",
+        help="ingest 产物目录。可重复传入多份做**跨文档检索**"
+             "（如 --doc A --doc B）；引用里会带 doc_id 区分来源。",
+    ),
     pdf: Path | None = typer.Option(None, "--pdf", help="或直接给 PDF（需先 ingest）"),
     domain: str = typer.Option("standard", "--domain", "-d"),
     show_json: bool = typer.Option(False, "--json", help="输出结构化 JSON"),
 ) -> None:
     """提问，返回答案 + 引用 + 自检结论。"""
     from .llm import build_llm_provider
-    from .pipeline import load_result
+    from .pipeline import load_results
     from .qa import QaAgent
 
     cfg = _cfg()
@@ -424,13 +479,16 @@ def ask(
     # "找不到已 ingest 的产物"，把人引去跑 ingest —— 而 ingest 同样会因为这个
     # 拼错的场景名失败。**先报那个真正的原因。**
     domain_profile = load_domain(domain, cfg)
-    doc_dir = doc or _latest_doc_dir(cfg, pdf)
-    if doc_dir is None:
-        console.print("[red]找不到已 ingest 的产物。请先运行 docqa ingest。[/red]")
-        raise typer.Exit(2)
+    doc_dirs = list(doc) if doc else []
+    if not doc_dirs:
+        latest = _latest_doc_dir(cfg, pdf)
+        if latest is None:
+            console.print("[red]找不到已 ingest 的产物。请先运行 docqa ingest。[/red]")
+            raise typer.Exit(2)
+        doc_dirs = [latest]
 
     try:
-        result = load_result(doc_dir, cfg, domain)
+        result = load_results(doc_dirs, cfg, domain)
     except (OSError, KeyError, ValueError) as exc:
         # 必须含 ValueError：产物里的 JSON 损坏时抛的是 json.JSONDecodeError，
         # 而它继承自 ValueError，**不是** OSError/KeyError。
@@ -491,6 +549,12 @@ def eval_cmd(
     json_out: Path | None = typer.Option(None, "--json-out"),
     baseline: Path | None = typer.Option(None, "--baseline", help="回归基线 JSON"),
     adversarial: bool = typer.Option(True, "--adversarial/--no-adversarial"),
+    transcription: Path | None = typer.Option(
+        None, "--transcription",
+        help="人工校对的转写基准（如 data/golden/transcription.md）。"
+             "给了就计算**索引层指标**（CER / 表格单元格准确率 / 数值字段召回）——"
+             "这一层排在报告最前面，因为检索到的内容本身错了，后面两层再漂亮也没意义。",
+    ),
 ) -> None:
     """跑评估，产出指标报告与回归比对。"""
     from .eval import load_golden, run_eval
@@ -533,6 +597,32 @@ def eval_cmd(
             f"这里把它当作**管路连通性检查**报告，不作为检索质量证据。"
         )
 
+    # --- 索引层指标（上下文可信度）---
+    #
+    # 这一层在报告里**排在最前面**：检索与生成的全部指标都建立在
+    # 「检索到的内容是对的」这个前提上，而扫描件场景里它恰恰最不牢靠。
+    ocr_metrics: dict = {}
+    if transcription is None:
+        notes.append(
+            "未提供 --transcription，**索引层指标（CER / 表格单元格准确率）本次未计算**。"
+            "报告里不会出现这一层——不是它没有问题，是没量。"
+        )
+    elif not transcription.exists():
+        console.print(f"[yellow]转写基准不存在，跳过索引层指标：{transcription}[/yellow]")
+        notes.append(f"--transcription 指向的 {transcription} 不存在，索引层指标本次未计算。")
+    else:
+        from .eval.ocr_eval import evaluate_ocr, parse_transcription
+
+        ref = parse_transcription(transcription)
+        console.print("  计算索引层指标（CER / 单元格准确率）…")
+        # 不用 console.status 的转圈动画：输出被重定向时它会狂刷帧，
+        # 日志里全是噪声。一行提示足够。
+        ocr_metrics = evaluate_ocr(result.pages, ref)
+        console.print(
+            f"[green]索引层[/green]：评估了 {ocr_metrics.get('pages_evaluated', 0)} 页"
+            f"（基准覆盖 {len(ref.pages)} 页）"
+        )
+
     # --- 先跑评估，再基于**已有结果**做对抗变异 ---
     #
     # 顺序很重要：对抗变异要的是"正确答案"作为变异素材，
@@ -543,6 +633,7 @@ def eval_cmd(
         items, agent.answer,
         engine=str(engine_name), doc_id=result.doc_id, domain=domain,
         notes=notes, pages=result.pages, manifest=result.manifest,
+        ocr_metrics=ocr_metrics,
     )
 
     if adversarial:
@@ -580,6 +671,21 @@ def eval_cmd(
                             encoding="utf-8")
 
     # --- 控制台摘要 ---
+    if ocr_metrics:
+        t0 = Table(title="① 索引层（上下文可信度）——先行报告", show_header=True,
+                   header_style="bold")
+        t0.add_column("指标")
+        t0.add_column("值")
+        for k, label in (("character_accuracy", "字符准确率 (1-CER)"),
+                         ("cer_normalized", "归一化 CER"),
+                         ("cer_strict", "符号敏感 CER"),
+                         ("numeric_field_recall", "数值字段召回"),
+                         ("table_cell_accuracy", "表格单元格准确率")):
+            if k in ocr_metrics:
+                v = ocr_metrics[k]
+                t0.add_row(label, f"{v:.2%}" if isinstance(v, float) and v <= 1 else str(v))
+        console.print(t0)
+
     t = Table(title="评估结果", show_header=True, header_style="bold")
     t.add_column("指标")
     t.add_column("值")
@@ -619,13 +725,11 @@ def eval_cmd(
     for note in notes:
         console.print(Panel(note, border_style="yellow"))
 
-    report.parent.mkdir(parents=True, exist_ok=True)
-    report.write_text(render_html_report(rep), encoding="utf-8")
+    # 产物在控制台摘要**之前**就已经写好了（见上方注释），这里只报告位置。
+    # 原先这里又写了一遍，是复制粘贴留下的；除了把 `render_html_report()`
+    # 白跑一次之外没有任何作用——摘要若崩溃，第一次写的文件早已落盘。
     console.print(f"\nHTML 报告：{report}")
     if json_out:
-        json_out.parent.mkdir(parents=True, exist_ok=True)
-        json_out.write_text(json.dumps(rep.to_dict(), ensure_ascii=False, indent=2),
-                            encoding="utf-8")
         console.print(f"JSON 结果：{json_out}")
 
     if baseline:

@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from ..config import Config
+from ..config import Config, ProviderConfig
 from ..errors import ConfigError
 from .base import OcrEngine, OcrEngineInfo, load_prompt
 from .cache import OcrCache, Provenance, cache_key, prompt_sha256
@@ -49,11 +49,14 @@ def build_engine(
     *,
     prompt_path: Path | None = None,
     fixtures_dir: Path | None = None,
+    provider_cfg: ProviderConfig | None = None,
 ) -> OcrEngine:
     """按名字构造 OCR 引擎。
 
     Args:
         name: "vlm"（主路径）/ "fixture"（仅测试）/ "local"（预留，未实现）
+        provider_cfg: 覆盖默认的 provider 配置。用于构造**第二引擎**
+            （跨引擎一致性校验）——它走 `cfg.ocr2` 而不是 `cfg.ocr`。
     """
     if name not in _REGISTRY:
         raise ConfigError(f"未知的 OCR 引擎 {name!r}。可用：{list(_REGISTRY)}")
@@ -74,12 +77,25 @@ def build_engine(
 
     from ..llm import build_ocr_provider
 
-    provider = build_ocr_provider(cfg)
+    provider = (build_provider_for(provider_cfg, cfg) if provider_cfg is not None
+                else build_ocr_provider(cfg))
     return VlmOcrEngine(
         provider,
         cfg,
         prompt_path=prompt_path or _default_prompt_path(),
-        cache=OcrCache(cfg.cache_dir),
+        # 第二引擎**不共用缓存**：共用的话它会把主引擎的结果当自己的返回，
+        # 比对必然一致——又是一个永远不会失败的检查。
+        cache=None if provider_cfg is not None else OcrCache(cfg.cache_dir),
+    )
+
+
+def build_provider_for(pcfg: ProviderConfig, cfg: Config):
+    """按**指定的** provider 配置构造 LLM provider（跨引擎校验的第二路）。"""
+    from ..llm import build_provider
+
+    return build_provider(
+        pcfg, timeout=cfg.http_timeout, max_retries=cfg.http_max_retries,
+        what="第二 OCR 引擎",
     )
 
 

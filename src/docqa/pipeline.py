@@ -26,6 +26,7 @@ from .index import HybridIndex
 from .logging import get_logger, stage
 from .models import Chunk, OcrPage, PdfProfile
 from .ocr import OcrEngine
+from .ocr.spotcheck import spotcheck_page
 from .render import describe as describe_images
 from .render import render_pages
 
@@ -41,7 +42,9 @@ class IngestResult:
     chunks: list[Chunk]
     index: HybridIndex
     manifest: dict
-    failed_pages: set[int]
+    # 单文档时是页码集合；多文档（`load_results`）时升级成 (doc_id, page_no)——
+    # 两份文件的"第 3 页"是两回事。`QaAgent` 会把两种形态归一成后者。
+    failed_pages: set[int] | set[tuple[str, int]]
 
     @property
     def succeeded_pages(self) -> int:
@@ -89,6 +92,7 @@ def ingest(
     domain: str,
     profile: DomainProfile | None = None,
     engine: OcrEngine | None = None,
+    engine2: OcrEngine | None = None,
     out_root: Path | None = None,
     force: bool = False,
 ) -> IngestResult:
@@ -97,6 +101,10 @@ def ingest(
     Args:
         domain: 业务场景名，用于装载 domain profile。
         engine: OCR 引擎；None 时由调用方（CLI）按配置构造并传入。
+        engine2: 可选的第二 OCR 引擎，用于跨引擎一致性校验。
+            给了就逐页再识别一遍并比对高风险字段，差异写回块级 `needs_review`。
+            **成本翻倍**，所以默认不启用——它防的是"证据本身被识别错"，
+            与自检防的"生成阶段幻觉"是两套机制，按风险预算决定是否开启。
         force: 忽略缓存强制重新识别（用于验证缓存之外的实跑结果）。
     """
     from .config import load_domain
@@ -196,6 +204,61 @@ def ingest(
                 )
             )
 
+    # --- 3b. 跨引擎一致性校验（可选）---
+    #
+    # 威胁模型与自检不是一回事：自检防的是**生成阶段的幻觉**，
+    # 而这里防的是**证据本身被识别错**——后者更隐蔽，因为答案里引用的
+    # 每一个字都"有出处"，只是那个出处是错的。
+    #
+    # 代价要说清楚：这一遍会把**每页再识别一次**，API 成本翻倍。
+    # 所以它默认关闭，只在配了 `DOCQA_OCR2_*` 时启用。
+    cross_engine: dict = {"enabled": False, "reason": "未配置第二 OCR 引擎"}
+    if engine2 is not None:
+        by_page = {img.page_no: img for img in images}
+        compared = 0
+        flagged = 0
+        skipped: list[int] = []
+        for page in pages:
+            image = by_page.get(page.page_no)
+            # 主引擎已经失败的页没有可比对象，跳过（它已经进了 failed 集）
+            if page.failed or image is None:
+                skipped.append(page.page_no)
+                continue
+            try:
+                other = engine2.ocr_page(image, profile=profiles_by_page.get(page.page_no))
+            except PageOcrError as exc:
+                # 第二引擎失败**不影响本页可用性**——它只是一路佐证信号。
+                # 但这必须记下来：否则"没比对"会被误读成"比对通过"。
+                skipped.append(page.page_no)
+                _log.warning(
+                    "第二引擎失败，该页跳过跨引擎校验",
+                    extra={"page": page.page_no, "detail": str(exc)[:200]},
+                )
+                continue
+            diff = spotcheck_page(page, other)
+            compared += 1
+            if not diff.agreed:
+                flagged += 1
+
+        cross_engine = {
+            "enabled": True,
+            "engine": getattr(engine, "name", ""),
+            "engine_b": getattr(engine2, "name", ""),
+            "pages_compared": compared,
+            "pages_flagged": flagged,
+            "pages_skipped": skipped,
+            "note": (
+                "比对的是高风险字段（数值/编号/单位），差异写回块级 needs_review。"
+                "标记≠有错，它是**送人工复核**的信号，不参与拒答判定。"
+            ),
+        }
+        if flagged:
+            _log.warning(
+                f"跨引擎校验：{compared} 页中发现 {flagged} 页存在字段差异，已标 needs_review"
+            )
+        else:
+            _log.info(f"跨引擎校验：{compared} 页字段两引擎一致")
+
     (out_dir / "ocr.json").write_text(
         json.dumps([p.to_dict() for p in pages], ensure_ascii=False, indent=2),
         encoding="utf-8",
@@ -235,6 +298,7 @@ def ingest(
         "ocr": {
             "engine": getattr(engine, "name", None),
             "model": getattr(engine, "model", None),
+            "cross_engine": cross_engine,
             "pages_total": len(pages),
             "pages_failed": sorted(failed),
             "warnings": {str(p.page_no): p.warnings for p in pages if p.warnings},
@@ -360,4 +424,68 @@ def load_result(out_dir: Path, cfg: Config, domain: str) -> IngestResult:
         index=index,
         manifest=manifest,
         failed_pages=set(manifest.get("ocr", {}).get("pages_failed", [])),
+    )
+
+
+def load_results(
+    out_dirs: list[Path], cfg: Config, domain: str
+) -> IngestResult:
+    """装载**多份** ingest 产物，合并成一个可检索的库。
+
+    为什么需要这个
+    --------------
+    实际业务里问题很少只落在一份文件上：合规场景要问"这几份制度里
+    对留存期限的规定是否一致"，客户交付要问"合同和技术协议对验收标准
+    怎么写的"。单文档检索回答不了这类问题。
+
+    合并的三件事
+    ------------
+    1. **片段**：直接拼接。`chunk_id` 本身带 doc_id 前缀（`<doc_id>:p1:c5`），
+       所以不存在 ID 冲突，引用也能看出答案来自哪份文件。
+    2. **索引**：在合并后的片段上**重建**一次。各自建好再合并分数是错的——
+       BM25 的 IDF 依赖整个语料，分头算出来的分数不可比。
+    3. **失败页**：升级成 `(doc_id, page_no)` 元组。
+       两份文件的"第 3 页"是两回事，只比页码会让一份的失败页误伤另一份的证据。
+
+    单份产物时行为与 `load_result` 完全一致。
+    """
+    from .config import load_domain
+
+    if not out_dirs:
+        raise InputError("没有可装载的产物目录")
+    if len(out_dirs) == 1:
+        return load_result(out_dirs[0], cfg, domain)
+
+    results = [load_result(d, cfg, domain) for d in out_dirs]
+
+    chunks: list[Chunk] = []
+    failed: set[tuple[str, int]] = set()
+    for r in results:
+        chunks.extend(r.chunks)
+        failed |= {(r.doc_id, p) for p in r.failed_pages}
+
+    merged_doc_id = "+".join(r.doc_id for r in results)
+    _log.info(
+        "多文档装载完成",
+        extra={
+            "doc": merged_doc_id,
+            "detail": f"{len(results)} 份产物，共 {len(chunks)} 个片段",
+        },
+    )
+    return IngestResult(
+        doc_id=merged_doc_id,
+        out_dir=out_dirs[0],
+        profile=results[0].profile,
+        pages=[p for r in results for p in r.pages],
+        chunks=chunks,
+        index=HybridIndex(chunks, load_domain(domain, cfg)),
+        manifest={
+            "doc_id": merged_doc_id,
+            "documents": [
+                {"doc_id": r.doc_id, "chunks": len(r.chunks),
+                 "failed_pages": sorted(r.failed_pages)}
+                for r in results
+            ],
+        },
+        failed_pages=failed,
     )
