@@ -11,11 +11,13 @@
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 
 import pytest
 from typer.testing import CliRunner
 
+import docqa.config as config_module
 from conftest import PROJECT_ROOT, make_block, make_page
 from docqa.cli import app
 from docqa.eval.corruption import (
@@ -322,6 +324,58 @@ class TestProbeReport:
 
 
 class TestEvalProbesCli:
+    def test_cli_does_not_read_project_dotenv(self, tmp_path, monkeypatch):
+        """用户 shell 里有完整 `.env`、且没有 `DOCQA_DISABLE_DOTENV` 时，命令也不读它。
+
+        这条守的是**命令自身的离线承诺**：`eval-probes` 的报告要能和干净环境逐字节
+        对比，就不能依赖"本机恰好配了什么"。所以判据不是报告里的数字，而是边界：
+        `load_dotenv` 一次都不该被调用。
+
+        反证在同一用例里：同一环境下默认 `load_config()` 确实会调用它——否则
+        "没被调用"可能只是因为这份 `.env` 路径根本没被看过，测试就是空的。
+        """
+        pdf = PROJECT_ROOT / "artifacts" / "demo" / "demo_scan.pdf"
+        fixtures = PROJECT_ROOT / "artifacts" / "demo" / "ocr"
+        if not pdf.exists() or not fixtures.exists():
+            pytest.skip("缺少合成件或 fixture 识别结果")
+
+        # 模拟开发机：项目根有一份配好了端点的 .env，进程环境里没有隔离开关。
+        project = tmp_path / "project"
+        project.mkdir()
+        (project / ".env").write_text(
+            "DOCQA_LLM_PROVIDER=openai\n"
+            "DOCQA_LLM_API_KEY=sk-should-not-be-read\n"
+            "DOCQA_LLM_MODEL=fake-model\n",
+            encoding="utf-8",
+        )
+        monkeypatch.setattr(config_module, "PROJECT_ROOT", project)
+        for key in [k for k in os.environ if k.startswith("DOCQA_")]:
+            monkeypatch.delenv(key, raising=False)
+
+        calls: list[tuple] = []
+        monkeypatch.setattr(
+            config_module, "load_dotenv", lambda *a, **k: calls.append((a, k))
+        )
+
+        result = runner.invoke(
+            app,
+            [
+                "eval-probes",
+                "--pdf", str(pdf),
+                "--fixtures-dir", str(fixtures),
+                "--out-root", str(tmp_path / "derived"),
+                "--report", str(tmp_path / "probes.md"),
+                "--json-out", str(tmp_path / "probes.json"),
+            ],
+        )
+
+        assert result.exit_code == 0, result.output
+        assert calls == [], "eval-probes 在离线路由上调用了 load_dotenv"
+
+        # 反证：同一份 .env、同一环境下，默认配置路径**会**读它。
+        config_module.load_config()
+        assert calls, "默认路径没有读 .env，这条隔离测试证明不了任何事"
+
     def test_cli_runs_offline_on_the_synthetic_fixture(self, tmp_path):
         """从干净环境跑一次真实命令：现场 fixture ingest → 两个探针 → 两份报告。"""
         pdf = PROJECT_ROOT / "artifacts" / "demo" / "demo_scan.pdf"

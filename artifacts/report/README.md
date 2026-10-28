@@ -33,7 +33,8 @@
 uv run docqa eval-probes        # 现场 fixture ingest + 三个纯本地探针，不触网
 ```
 
-它也**不需要任何密钥**，且不读 `.env`。局限（正例偏易、字段类型覆盖不全、
+它也**不需要任何密钥**，且不读 `.env`（命令自身调用 `load_config(read_dotenv=False)`，
+有回归用例断言 `load_dotenv` 未被调用）。局限（正例偏易、字段类型覆盖不全、
 单点差异可能看不见、定向污染只测抽取式路径）写在报告与
 [docs/evaluation.md](../../docs/evaluation.md) 第六之三、第六之四。
 

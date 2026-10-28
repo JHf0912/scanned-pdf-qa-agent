@@ -295,7 +295,11 @@ def _apply(section: dict, target: object) -> None:
 
 
 def load_config(
-    path: Path | None = None, *, env_file: Path | None = None, require_ocr: bool = False
+    path: Path | None = None,
+    *,
+    env_file: Path | None = None,
+    require_ocr: bool = False,
+    read_dotenv: bool = True,
 ) -> Config:
     """装载配置。
 
@@ -305,11 +309,17 @@ def load_config(
             `DOCQA_DISABLE_DOTENV=1` 也会读**——调用方明确指定了文件。
         require_ocr: 为 True 时，缺少 OCR 端点直接报错。解析类命令应传 True，
             这样用户在第一步就能拿到可操作的提示，而不是跑到一半才失败。
+        read_dotenv: 为 False 时**不自动读项目根的 `.env`**（也不会读 `env_file`）。
+            这是命令级的显式开关，不依赖环境变量：离线命令（如 `eval-probes`）
+            必须由代码钉住"不读 .env"，否则"本机配了什么"会悄悄改变它的输入。
     """
-    if env_file is not None:
-        load_dotenv(env_file, override=False)
-    elif not _env_bool(DOTENV_DISABLE_ENV, False):
-        load_dotenv(PROJECT_ROOT / ".env", override=False)
+    if read_dotenv:
+        if env_file is not None:
+            load_dotenv(env_file, override=False)
+        elif not _env_bool(DOTENV_DISABLE_ENV, False):
+            load_dotenv(PROJECT_ROOT / ".env", override=False)
+    # `read_dotenv=False`：显式离线，连 env_file 都不读。
+    # 调用方已经声明"这一轮与 .env 无关"，不应再依赖进程环境碰巧是什么。
     # `DOCQA_DISABLE_DOTENV=1` 时**不自动读项目根的 .env**。
     # 测试与 CI 用它把自己与开发机的密钥环境隔开（见 conftest.py）；
     # 显式 `env_file=` 仍然生效，见上面的 Args。

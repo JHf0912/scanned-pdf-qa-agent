@@ -44,6 +44,17 @@ def _clear_docqa_env(keep_switch: bool = True) -> None:
             del os.environ[key]
 
 
+def _clear_docqa_env_via_monkeypatch(monkeypatch) -> None:
+    """清掉 DOCQA_*（含开关），但让 monkeypatch 在用例结束后恢复。
+
+    离线命令的测试要模拟**真实用户 shell**（没有 conftest 置上的开关）。
+    这里不能直接 `del os.environ[...]`：那会把开关从整个测试会话里永久删掉，
+    后续用例就会开始读开发机的 `.env`——测试之间互相污染，而且是静默的。
+    """
+    for key in [k for k in os.environ if k.startswith("DOCQA_")]:
+        monkeypatch.delenv(key, raising=False)
+
+
 class TestDefaultChannelIsOffline:
     def test_dotenv_loading_is_disabled(self, request):
         """默认通道里，conftest 必须已经把开关置上。"""
@@ -78,6 +89,39 @@ class TestDisableDotenv:
 
         assert not cfg.has_llm
         assert not cfg.has_ocr
+
+    def test_explicit_read_dotenv_false_does_not_depend_on_process_env(
+        self, tmp_path, monkeypatch
+    ):
+        """`read_dotenv=False` 是命令级隔离：不靠环境变量，也不读项目根 .env。
+
+        这条与上一条的区别很重要：上一条证明的是"测试进程里恰好把开关置上了"，
+        离开 pytest 就不成立。离线命令（如 `eval-probes`）必须自己声明离线，
+        否则用户在配了端点的机器上跑它，输入就与干净环境不是同一份。
+        """
+        (tmp_path / ".env").write_text(_FAKE_ENV, encoding="utf-8")
+        monkeypatch.setattr(config_module, "PROJECT_ROOT", tmp_path)
+        _clear_docqa_env_via_monkeypatch(monkeypatch)
+
+        cfg = load_config(read_dotenv=False)
+
+        assert not cfg.has_llm, "read_dotenv=False 时仍然读到了 .env"
+        assert not cfg.has_ocr
+
+    def test_default_path_would_have_read_that_dotenv(self, tmp_path, monkeypatch):
+        """反证：同一份 `.env` 在默认路径下确实会被读——否则上一条是空测试。"""
+        (tmp_path / ".env").write_text(_FAKE_ENV, encoding="utf-8")
+        monkeypatch.setattr(config_module, "PROJECT_ROOT", tmp_path)
+        _clear_docqa_env_via_monkeypatch(monkeypatch)
+
+        seen: list[tuple] = []
+        monkeypatch.setattr(
+            config_module, "load_dotenv", lambda *a, **k: seen.append((a, k))
+        )
+
+        load_config()
+
+        assert seen, "默认路径没有调用 load_dotenv，这条反证不成立"
 
     def test_explicit_env_file_still_loads(self, tmp_path):
         """逃生口不能被焊死：显式 `env_file=` 时仍然读那个文件。

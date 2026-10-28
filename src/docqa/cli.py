@@ -60,8 +60,8 @@ def _main_callback(
     """扫描版 PDF 智能文档问答 Agent。"""
 
 
-def _cfg(require_ocr: bool = False) -> Config:
-    cfg = load_config(require_ocr=require_ocr)
+def _cfg(require_ocr: bool = False, *, read_dotenv: bool = True) -> Config:
+    cfg = load_config(require_ocr=require_ocr, read_dotenv=read_dotenv)
     setup_logging(cfg.log_level, json_output=False)
     return cfg
 
@@ -1002,7 +1002,7 @@ def eval_probes(
     from .ocr.fixture import FixtureOcrEngine
     from .pipeline import ingest, load_result
 
-    cfg = _cfg()
+    cfg = _cfg(read_dotenv=False)
     profile = load_domain(domain, cfg)  # 场景名非法时尽早报错，而不是跑到一半
     items = load_golden(golden) if golden.exists() else None
     if items is None:
