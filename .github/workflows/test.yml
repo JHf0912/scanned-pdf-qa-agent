@@ -1,0 +1,125 @@
+name: test
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+# 只读令牌：CI 不该有写权限。
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.12"]
+    steps:
+      - uses: actions/checkout@v4
+
+      # 用 uv 而不是 pip：`uv.lock` 已经入库，装出来的依赖与开发机一致。
+      # 这是"可复现"这条要求在 CI 上的落点。
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+          cache-dependency-glob: uv.lock
+
+      - name: Sync dependencies (with eval extra)
+        # 必须带 --all-extras：不带的话 `uv sync` 会把 extras 卸掉，
+        # 于是 CER 相关测试全跳过——CI 会"全绿"却什么都没测。
+        run: uv sync --all-extras --frozen
+
+      - name: Lint (ruff)
+        # 只做**检查**，不强制 `ruff format`。
+        #
+        # 原因写在这里以免日后有人"顺手补上"：本仓库的代码风格（长注释、
+        # 刻意对齐的表格式注释）与 ruff format 的自动折行冲突，全量重排会
+        # 产生一个与任何功能改动都无关的巨大 diff，把 review 淹没。
+        # 格式偏好留给作者，**正确性**留给 CI。
+        run: uv run ruff check src tests tools
+
+      - name: Prepare a demo artifact for CLI/API tests
+        # 有一批 CLI / Web 用例在缺产物时会 skip。**skip 也是一种"绿色但没测"**，
+        # 正是这个仓库反复批评的那种失败模式。所以在跑测试之前先把合成件
+        # ingest 一份，让它们真的执行。纯本地、fixture 引擎、不需要密钥。
+        #
+        # ⚠️ 这里**不能**加 `--out out/demo`。`run_ingest` 的 out_root 默认是
+        # `cfg.cache_dir.parent`，也就是 `data/derived/`；而 Web/CLI 用例
+        # 正是去那里找产物（`_discover()` / `_latest_doc_dir()` 都读它）。
+        # 写到 `out/demo` 的话，产物在那儿、用例却看不见——它们照样 skip，
+        # 覆盖率掉下来，而这一步看上去"做过了"。
+        # 回归 job 另说：它显式 `--doc` 指过去，所以可以在 out/ 下。
+        run: |
+          uv run docqa ingest artifacts/demo/demo_scan.pdf \
+            --engine fixture --fixtures-dir artifacts/demo/ocr
+
+      - name: Test with coverage gate
+        # 覆盖率下限写在 pyproject.toml 的 [tool.coverage.report] 里，
+        # 这里只负责启用。门禁放在配置里而不是这行命令里：
+        # 本地跑 `pytest --cov` 也会遵守同一个门槛。
+        run: uv run pytest -q --cov=src/docqa --cov-report=term-missing --cov-report=xml
+
+      - name: Upload coverage artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-${{ matrix.python-version }}
+          path: coverage.xml
+          if-no-files-found: ignore
+
+  # ------------------------------------------------------------------ 回归门禁
+  #
+  # 只有**合成演示件**进这条：它不需要任何密钥，用 fixture 引擎跑，
+  # 因此可以在 CI 上重复执行。真实文档（GB/T）不进 CI——它不入库，
+  # 那份评估只在本地跑，结论写在 README 里。
+  #
+  # 这条门禁真正验证的是：**三层评估能跑完、报告能生成、基线能比**，
+  # 而不是"模型答得多好"。后者需要真实端点，不在 CI 的能力范围内。
+  regression:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+          cache-dependency-glob: uv.lock
+      - name: Sync dependencies
+        run: uv sync --all-extras --frozen
+
+      - name: Ingest the synthetic demo document (fixture engine, no keys)
+        run: |
+          uv run docqa ingest artifacts/demo/demo_scan.pdf \
+            --engine fixture --fixtures-dir artifacts/demo/ocr \
+            --out out/demo
+
+      - name: Eval against the committed baseline
+        # 基线是 `data/baselines/demo_fixture.json`，由 `--save-baseline` 产出。
+        # 任何指标下滑都会以退出码 5 失败——这就是"可挂 CI 的回归门禁"的实证。
+        #
+        # `--no-llm` 不是可选项：CI 上本来就没有密钥（走抽取式），而本地开发机
+        # 常常配了模型。不钉住这条路径的话，两边算出来的数字不可比，
+        # 基线会随机翻红——一个会自己变的数字不能当基准。
+        run: |
+          uv run docqa eval \
+            --doc "$(ls -d out/demo/*/ | head -n1)" \
+            --golden data/golden/demo_qa.jsonl \
+            --transcription artifacts/demo/transcription.md \
+            --report out/demo_report.html \
+            --json-out out/demo_eval.json \
+            --baseline data/baselines/demo_fixture.json \
+            --no-llm \
+            --noise-sweep 3
+
+      - name: Upload report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: demo-eval-report
+          path: |
+            out/demo_report.html
+            out/demo_eval.json
+          if-no-files-found: ignore

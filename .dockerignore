@@ -1,0 +1,48 @@
+# 构建上下文里不该出现的东西
+#
+# 关键一条：**绝不把 .env 打进镜像**。镜像层是不可变的，
+# 一旦密钥进过某一层，后面 `rm` 掉也仍然能从层里捞出来。
+.env
+.env.*
+!.env.example
+
+# 输入文档与中间产物（含真实文档正文，不能进镜像）
+data/raw/
+data/derived/
+out/
+
+# 本地工具与临时目录
+.tmprun/
+.tools/
+.pytest-tmp/
+.uvcache/
+.venv/
+
+# 版本控制与编辑器
+.git/
+.gitignore
+.github/
+.vscode/
+.idea/
+
+# Python 缓存
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# 文档与报告体积较大，且不属于运行必需
+docs/
+*.md
+!README.md
+# ⚠️ `*.md` 在 .dockerignore 里与 .gitignore 同语义，**匹配任意层级**，
+# 所以它也会把 `prompts/ocr_page.v1.md` 一起排除——而那正是 OCR 引擎
+# 运行期要读的提示词。少了它，镜像能 build 成功，
+# 但第一次 ingest 就会因为读不到提示词而失败。
+!prompts/*.md
+
+# 注意：**不要**在这里排除 config/ 与 prompts/。
+# 它们在运行期被按相对路径读取（见 Dockerfile 里的说明），
+# 排除掉会让镜像能 build 成功、却一启动就报"找不到配置文件"。
