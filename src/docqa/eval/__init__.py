@@ -19,6 +19,7 @@ from .runner import (
     context_utilization,
     load_golden,
     run_eval,
+    save_baseline,
     score_item,
 )
 
@@ -26,7 +27,7 @@ __all__ = [
     "cer", "character_accuracy", "wilson_interval", "recall_at_k",
     "reciprocal_rank", "ndcg_at_k", "table_cell_accuracy", "numeric_field_accuracy",
     "GoldenItem", "load_golden", "run_eval", "score_item", "compare_baseline",
-    "context_utilization", "EvalReport",
+    "save_baseline", "context_utilization", "EvalReport",
     "generate_mutations", "run_adversarial",
     "NoiseConfig", "inject_noise", "noise_sweep_levels", "DEFAULT_LEVELS",
 ]

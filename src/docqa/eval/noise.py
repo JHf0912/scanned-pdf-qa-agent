@@ -126,3 +126,54 @@ def noise_sweep_levels(levels: tuple[float, ...] = DEFAULT_LEVELS, seeds: int = 
         for s in range(seeds):
             out.append(NoiseConfig(level=level, seed=s))
     return out
+
+
+def perturb_pages(pages, cfg: NoiseConfig):
+    """按噪声配置污染一批 `OcrPage` 的正文块，返回**新的**页面列表。
+
+    为什么污染必须发生在切分之前
+    ----------------------------
+    这个实验要回答的是"证据被读错时，系统会怎样"。所以污染要落在**索引之前**：
+    检索、生成、自检都面对这份被污染的文本。否则测的就不是"证据被污染"，
+    而只是"答案被改写"——后者与 OCR 无关。
+
+    表格块不污染：表格里全是数字与短单元格，随机注入形近字只会得到
+    无法定位的乱码，测出来的退化没有解释力。这一点在报告里如实写明。
+
+    返回新的 `OcrPage` 列表，**不修改原对象**——同一份产物要被多个档位复用。
+    """
+    from dataclasses import replace as _replace
+
+    out = []
+    for page in pages:
+        new_blocks = []
+        for b in getattr(page, "blocks", []) or []:
+            if getattr(b, "is_table", False) or not getattr(b, "text", ""):
+                new_blocks.append(b)
+                continue
+            polluted = inject_noise(b.text, cfg)
+            new_blocks.append(_replace(b, text=polluted) if polluted != b.text else b)
+        out.append(_replace(page, blocks=new_blocks) if new_blocks else page)
+    return out
+
+
+def actual_cer(reference: str, cfg: NoiseConfig) -> float:
+    """实际注入后的字符错误率（Levenshtein / 参考长度）。
+
+    报告里必须同时给"配置的 level"与"实际 CER"：只报配置值会掩盖
+    "实际注入得比预期少"这种情况（形近字表覆盖不到的字会走别的分支，
+    实际改动量与 level 并不相等）。
+    """
+    if not reference or cfg.level <= 0:
+        return 0.0
+    polluted = inject_noise(reference, cfg)
+    if not polluted:
+        return 1.0
+    prev = list(range(len(polluted) + 1))
+    for i, ch in enumerate(reference, start=1):
+        cur = [i] + [0] * len(polluted)
+        for j, ph in enumerate(polluted, start=1):
+            cur[j] = min(prev[j] + 1, cur[j - 1] + 1,
+                         prev[j - 1] + (0 if ch == ph else 1))
+        prev = cur
+    return prev[-1] / len(reference)

@@ -22,7 +22,6 @@ from dataclasses import dataclass
 
 from ..config import ProviderConfig
 from ..errors import ProviderError
-from ..models import Usage
 from .base import LLMResponse
 
 

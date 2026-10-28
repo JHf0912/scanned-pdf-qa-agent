@@ -3,10 +3,29 @@
 原则：**单元测试不碰网络、不碰模型、不碰真实文档。**
 所有需要外部依赖的测试都标 `@pytest.mark.live` 并默认跳过——
 一份跑得起来但结果随环境漂移的测试，比没有测试更糟。
+
+## 关于 `live` 通道
+
+这个标记曾经是**空的**：`pyproject.toml` 注册了它，本文件也这么写着，
+但全仓没有一个用例打标——于是"需要真实端点的验证有专门通道"这句话
+只是承诺，实际没有任何真实端点被验证过。
+
+现在它是一条真的通道：
+
+```powershell
+uv run pytest -m live --live          # 有密钥时，真的打一次端点
+uv run pytest -m live                 # 不加 --live 则全部 skip
+uv run pytest -m "not live"           # 默认行为（CI 用这条）
+```
+
+`--live` 必须显式给：光有密钥不该让测试悄悄开始花钱。
 """
 
 from __future__ import annotations
 
+import os
+import sys
+import tempfile
 from pathlib import Path
 
 import pytest
@@ -15,6 +34,127 @@ from docqa.config import DomainProfile, load_config, load_domain
 from docqa.models import Chunk, Citation, OcrBlock, OcrPage, Usage
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
+
+
+# ---------------------------------------------------------------- live 通道
+
+def pytest_addoption(parser) -> None:
+    parser.addoption(
+        "--live",
+        action="store_true",
+        default=False,
+        help="真的调用外部端点跑 @pytest.mark.live 用例（会产生费用）",
+    )
+
+
+def pytest_collection_modifyitems(config, items) -> None:
+    """没有 `--live` 时，把 live 用例全部 skip 掉并说明原因。
+
+    注意"没有密钥"与"没有加开关"是两件事，提示要分开写：
+    否则用户在配了密钥之后仍然看到 skip，会以为密钥没生效。
+    """
+    if config.getoption("--live"):
+        return
+    skip = pytest.mark.skip(
+        reason="需要真实端点：加 --live 才会执行（会产生 API 费用）"
+    )
+    for item in items:
+        if "live" in item.keywords:
+            item.add_marker(skip)
+
+
+# ---------------------------------------------------------------- 临时目录
+#
+# 把 pytest 的临时目录换成一份**在当前进程里可枚举**的等价实现。
+#
+# 为什么需要（这不是洁癖，是真实踩过的坑）
+# ---------------------------------------
+# pytest 的 `tmp_path` 为防符号链接攻击，用 `mkdir(mode=0o700)` 建目录
+# （见 `_pytest/tmpdir.py:getbasetemp` 与 `_pytest/pathlib.make_numbered_dir`）。
+# 在 Windows 上，`0o700` 会让新目录拿到**受保护的 DACL**——
+# 只有 `OWNER RIGHTS` / `SYSTEM` / `Administrators` 三项，且**不再继承父目录**。
+#
+# 在普通开发者机器上这没问题。但在**降权运行的沙箱或 CI 容器**里
+# （进程本身在低完整性级别，还叠着一层写白名单），当前身份不算 OWNER RIGHTS，
+# 于是 pytest 自己刚建出来的 basetemp **立刻就无法枚举**：
+#
+#   - 每个用到 `tmp_path` 的用例在 setup 阶段报 `PermissionError: WinError 5`；
+#   - 收尾阶段 `cleanup_dead_symlinks` 再炸一次，连汇总行都来不及打印。
+#
+# 现象是"测试全挂了"，而代码一行都没动过。`--basetemp` 也救不了：
+# pytest 会先 `rm_rf` 掉给定目录，再以 `mode=0o700` 重建。
+#
+# 所以这里覆盖 `tmp_path_factory` 与 `tmp_path` 两个**官方扩展点**，
+# 用一样的语义（每个用例一个独立目录、会话级复用、不自动删除）建目录，
+# 只是不收紧权限位。除权限位外的行为与 pytest 原生一致。
+
+class _TmpPathFactory:
+    """`tmp_path_factory` 的替身：语义相同，权限位不收紧。"""
+
+    def __init__(self, base: Path) -> None:
+        self._base = base
+        self._counter = 0
+        base.mkdir(parents=True, exist_ok=True)
+
+    @property
+    def base_dir(self) -> Path:
+        return self._base
+
+    def getbasetemp(self) -> Path:
+        return self._base
+
+    def mktemp(self, name: str, numbered: bool = True) -> Path:
+        # 用例名可能含 `[`、`]`、`/` 等非法字符，先洗掉。
+        safe = "".join(ch if (ch.isalnum() or ch in "-_.") else "_" for ch in name)[:60]
+        self._counter += 1
+        prefix = f"{self._counter:03d}-" if numbered else ""
+        candidate = self._base / f"{prefix}{safe}"
+        suffix = 1
+        # 重名不能直接复用：复用一个已有目录会让"本用例的干净目录"这个前提失效。
+        while candidate.exists():
+            suffix += 1
+            candidate = self._base / f"{prefix}{safe}{suffix}"
+        candidate.mkdir(parents=True)
+        return candidate
+
+
+def _tmp_base() -> Path:
+    """选一个当前进程确实能枚举的临时根目录。
+
+    先试仓库内（与源码同卷，PyMuPDF 打开临时 PDF 时不必跨卷），
+    再退到系统临时目录（只读检出、容器只读挂载等场景下仓库不可写）。
+    """
+    candidates = [
+        PROJECT_ROOT / ".pytest-tmp",
+        Path(tempfile.gettempdir()) / "docqa-pytest",
+    ]
+    for candidate in candidates:
+        try:
+            candidate.mkdir(parents=True, exist_ok=True)
+            os.listdir(candidate)  # 关键：自己确认可枚举，别把问题留到用例里
+        except OSError:
+            continue
+        return candidate
+    raise RuntimeError(
+        "找不到可枚举的 pytest 临时目录。请检查进程对仓库或系统临时目录的写权限。"
+    )
+
+
+@pytest.fixture(scope="session")
+def tmp_path_factory() -> _TmpPathFactory:
+    return _TmpPathFactory(_tmp_base())
+
+
+@pytest.fixture
+def tmp_path(tmp_path_factory, request) -> Path:
+    """与 pytest 原生 `tmp_path` 同语义：每个用例一个独立目录。"""
+    return tmp_path_factory.mktemp(request.node.name)
+
+
+@pytest.fixture
+def tmpdir(tmp_path):
+    """兼容 `tmpdir` 这个旧名字（个别测试按字符串路径使用）。"""
+    return str(tmp_path)
 
 
 @pytest.fixture(scope="session")

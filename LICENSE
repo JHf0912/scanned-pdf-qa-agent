@@ -1,0 +1,39 @@
+MIT License
+
+Copyright (c) 2026 docqa contributors
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+
+-------------------------------------------------------------------------------
+
+关于依赖的许可（这一段不是 MIT 的一部分，是事实说明）
+
+本仓库**自己的代码**是 MIT。但它依赖的 PyMuPDF 是 AGPL-3.0（双许可），
+这一点对"分发"和"提供网络服务"有实际后果，不能只看本文件的标题：
+
+- 若你**分发**本软件（含打进 Docker 镜像分发），AGPL 要求整个组合作品
+  按 AGPL 开源，或向 Artifex 购买商业许可，或换成宽松许可的 PDF 库；
+- 若你把它**作为网络服务**提供给别人用，AGPL 第 13 条要求向使用者
+  提供对应源码；
+- 仅自己内部使用、不分发也不对外提供服务，通常不触发上述义务。
+
+本仓库不附带任何标准正文或真实文档（`data/raw/` 与 `data/derived/` 均已
+gitignore），因此 MIT 的适用范围不含这些内容——它们本来也不在这里。
+
+详见 docs/scalability.md 第六节与 docs/deployment.md。

@@ -189,6 +189,36 @@ class TestJsonParsing:
         with pytest.raises(ProviderError):
             LLMResponse("完全不是 JSON", "p", "m").parse_json()
 
+    def test_unescaped_newline_in_string_is_tolerated(self):
+        """字符串内的裸换行要能解析出来（`strict=False` 兜底）。
+
+        这是**真端点冒烟测试第一次跑就撞上的**：模型把多行内容塞进
+        一个 JSON 字符串时，常写成裸换行而不写 `\\n`，`json.loads`
+        默认 `strict=True` 会直接拒绝：
+        `Invalid control character at: line 1 column 44`。
+
+        对 OCR 场景这不是小事——识别结果里**每一条正文块都含换行**，
+        一旦整页 JSON 有处裸换行就被判"模型没按格式回话"并重试，
+        等于把一次成功的识别当成失败，白花钱还拿不到结果。
+        """
+        raw = '{"blocks": [{"text": "3.1 抗拉强度\n应大于等于 590 MPa"}]}'
+        got = LLMResponse(raw, "p", "m").parse_json()
+        assert got["blocks"][0]["text"] == "3.1 抗拉强度\n应大于等于 590 MPa"
+
+    def test_still_rejects_genuinely_broken_json(self):
+        """放宽的只有控制字符，**真语法错误照旧失败**。
+
+        这条是防止兜底变成"什么都收"：缺逗号、截断的 JSON 必须继续报错，
+        否则下游会拿到一个结构不对的 dict，然后在几十行之外炸掉。
+        """
+        for bad in (
+            '{"a": 1 "b": 2}',      # 缺逗号
+            '{"a": [1, 2',          # 截断
+            '{"a": 1} 后面还有话',   # 尾部多余内容（截取 {..} 后仍是坏的）
+        ):
+            with pytest.raises(ProviderError):
+                LLMResponse(bad, "p", "m").parse_json()
+
 
 class TestBuildProvider:
     def test_unknown_provider_rejected(self):

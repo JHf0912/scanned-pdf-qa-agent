@@ -31,7 +31,7 @@ from pathlib import Path
 import pymupdf
 
 from .errors import PdfUnreadableError
-from .models import DetectSignal, PageProfile, PdfProfile, PageKind
+from .models import DetectSignal, PageKind, PageProfile, PdfProfile
 
 # --- 阈值（集中在此，便于按语料调整；调整依据写进 docs/evaluation.md）---
 

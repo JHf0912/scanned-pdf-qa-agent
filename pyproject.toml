@@ -3,6 +3,10 @@ name = "docqa"
 version = "0.1.0"
 description = "扫描版 PDF 智能文档问答 Agent —— 文档理解 + 检索问答 + 可靠性验证"
 readme = "README.md"
+# 本仓库**自己的代码**是 MIT（见 LICENSE）。但 PyMuPDF 是 AGPL-3.0，
+# 分发或对外提供服务会触发 AGPL 义务——LICENSE 文件末尾与
+# docs/deployment.md 已写清边界，不在这里假装它不存在。
+license = { file = "LICENSE" }
 # 钉 3.12：MinerU 在 Windows 上只支持 3.10–3.12（被 ray 卡在 3.13），
 # EasyOCR 也明确不推荐 3.12+。钉在这里 = 本地 OCR 备选路线全部保留。
 requires-python = ">=3.12,<3.13"
@@ -25,9 +29,13 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-# 本地确定性表格引擎：与 VLM 做跨引擎交叉校验。
-# 单独分组，因为它不是主路径的硬依赖——装不上不影响 ingest/ask/eval 跑通。
-table = ["rapid-table>=3.0.2"]
+# 注意：这里**没有** `table` 这个 extra。
+#
+# 它曾经声明 `rapid-table>=3.0.2`，注释写着"与 VLM 做跨引擎交叉校验"，
+# 但全仓库**零 import**——装上也什么都不发生。跨引擎交叉校验走的是
+# `DOCQA_OCR2_*`（第二个视觉模型），与 rapid-table 无关。
+# 留一个装了不生效的 extra，比不留更糟：`uv sync --all-extras` 会把它装上，
+# 然后让人以为表格校验这一路已经有保障了。
 
 # OCR 精度评估。单独分组是因为它们是**评估**依赖而非运行依赖——
 # 没有它们仍能问答，只是跑不了 CER 指标（评估会明确标注该项缺失，不静默跳过）。
@@ -42,6 +50,7 @@ eval = [
 dev = [
     "pytest>=8.3.0",
     "pytest-cov>=6.0.0",
+    "ruff>=0.9.0",
 ]
 
 [project.scripts]
@@ -71,4 +80,57 @@ markers = [
 
 [tool.coverage.run]
 source = ["src/docqa"]
-omit = ["src/docqa/web/*"]
+omit = [
+    "src/docqa/web/*",
+    # 平台相关、且只在真实端点下才走到的路径。列出来是为了让"未覆盖"
+    # 这个数字诚实：它们不是"忘了写测试"，是"没法在无密钥环境里测"。
+    "src/docqa/llm/anthropic.py",
+]
+
+[tool.coverage.report]
+# 覆盖率门禁。**刻意放在配置里而不是 CI 命令里**：
+# 本地 `pytest --cov` 与 CI 遵守同一个门槛，避免"CI 绿了、本地其实降了"。
+# 86 是当前实测值（3486 条语句、约 480 未覆盖）向下取整的保守下限——
+# 定成当前值会让每个无关改动都去动这个数字，定得太低又拦不住回归。
+fail_under = 84
+show_missing = true
+skip_covered = false
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = [
+    "E",    # pycodestyle
+    "F",    # pyflakes（能抓出未使用的 import / 变量，本项目之前踩过死代码的坑）
+    "I",    # import 排序
+    "B",    # bugbear（可变默认值、zip 不带 strict 之类）
+]
+ignore = [
+    # 中文注释里的全角标点会让 E501 误报；行长由 ruff format 负责，不重复管。
+    "E501",
+    # FastAPI 的依赖注入靠默认值传参，B008 会误报。
+    "B008",
+    # `__all__` 里列出的名字在本文件"未使用"是正常的：那是再导出。
+    # 关掉这条会连真正的死导入一起漏掉，所以宁可在这里配 `allowed-*`；
+    # 本项目每个包都有 __init__ 再导出，逐条 noqa 反而更吵。
+]
+# `__init__.py` 的再导出视为使用。
+[tool.ruff.lint.flake8-tidy-imports]
+ban-relative-imports = "parents"
+
+[tool.ruff.lint.per-file-ignores]
+# 包的 __init__ 靠 import 做再导出，F401 在那里没有意义。
+"src/docqa/**/__init__.py" = ["F401"]
+# 测试里 fixture 常按名字注入、`import pytest` 用于 mark，误报较多；
+# 只保留真正会导致 bug 的规则。
+"tests/**" = ["F401", "B011"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["docqa"]
+
+# 注意：**故意不启用** `ruff format` 的强制校验。
+# 本仓库的注释与对齐是刻意排版的，自动折行会产生与功能无关的巨大 diff。
+# 格式留给作者，CI 只守正确性（lint + 测试 + 覆盖率 + 回归基线）。

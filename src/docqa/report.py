@@ -148,6 +148,63 @@ def _render_grid(grid) -> str:
     )
 
 
+def _render_retrieval_layer(rep: "EvalReport") -> str:
+    """渲染**检索层**（②）。
+
+    这一节此前在文档里存在、在报告里不存在：`metrics.py` 里有 Recall@k / MRR / nDCG
+    三个函数，但 `runner.py` 从不调用它们。于是 README 首页写着"三层评估"，
+    报告里只有索引层与生成层。
+
+    统计口径只覆盖**标注了 `relevant_chunk_ids`** 的题。没标注的题不猜、也不拿
+    页码近似——用页码当相关集会把同页全部 chunk 都算相关，Recall 会被拔到接近 1。
+    所以这一节必须把**参与题数**写在指标卡上，让读者知道这个 n 有多大。
+    """
+    ret = getattr(rep, "retrieval", None) or {}
+    n = ret.get("n", 0)
+    if not n:
+        return (
+            "<h2>② 检索层（Recall@k / MRR / nDCG）</h2>"
+            '<div class="warnbox">本集<b>没有题目标注相关片段</b>'
+            "（<code>relevant_chunk_ids</code>），因此检索层指标本次未计算。<br>"
+            "这不是「检索没问题」，而是<b>没有量</b>：检索层要的是片段级的相关集，"
+            "用页码近似会把同页全部片段都算成相关，那个数字没有信息量。</div>"
+        )
+
+    k = ret.get("k", 10)
+    m = rep.metrics
+    out: list[str] = [
+        "<h2>② 检索层（Recall@k / MRR / nDCG）</h2>",
+        f"<p class='sub'>参与统计 <b>{n}</b> 题（只统计标注了相关片段的题）；k = {k}。"
+        "这一层回答的是「正确的那一段有没有被召回、排在第几」，它是生成层的前置条件。</p>",
+    ]
+    out.append('<div class="cards">')
+    out.append(_metric_card(f"Recall@{k}", _pct(m.get("retrieval_recall_at_k", 0)), f"n={n}"))
+    out.append(_metric_card("MRR", f"{m.get('retrieval_mrr', 0):.3f}",
+                            "首个相关片段的排名倒数"))
+    out.append(_metric_card(f"nDCG@{k}", f"{m.get('retrieval_ndcg_at_k', 0):.3f}",
+                            "考虑排序位置"))
+    out.append("</div>")
+
+    per_cat = ret.get("per_category") or {}
+    if per_cat:
+        out.append("<table><tr><th>题型</th><th>n</th><th>Recall@k</th>"
+                   "<th>MRR</th><th>nDCG@k</th></tr>")
+        for cat, d in per_cat.items():
+            out.append(
+                f"<tr><td><code>{_esc(cat)}</code></td><td class='num'>{d['n']}</td>"
+                f"<td class='num'>{_pct(d['recall_at_k'])}</td>"
+                f"<td class='num'>{d['mrr']:.3f}</td>"
+                f"<td class='num'>{d['ndcg_at_k']:.3f}</td></tr>"
+            )
+        out.append("</table>")
+
+    out.append(
+        "<p class='sub'>口径：相关集来自题目里<b>显式标注</b>的片段，不是页码推出来的。"
+        "语料很小时这些数字只适合当管路连通性检查——报告照实写 n，读者自己判断。</p>"
+    )
+    return "".join(out)
+
+
 def _render_index_layer(rep: "EvalReport") -> str:
     """渲染**索引层**（上下文可信度）指标。
 
@@ -357,6 +414,11 @@ def render_html_report(rep: "EvalReport") -> str:
                               "被引 chunk / 召回 chunk"))
     parts.append(_metric_card("平均尝试轮次", f"{m.get('mean_attempts', 0):.2f}",
                               "自检触发修复的频次"))
+    # 延迟只报中位数与 p95，且**只在真的测到延迟时才报**——
+    # 没有数据时显示 0ms 会被读成"很快"，那是另一种假象。
+    if m.get("latency_p50_ms"):
+        parts.append(_metric_card("延迟中位数", f"{m['latency_p50_ms']:.0f} ms",
+                                  f"p95 {m.get('latency_p95_ms', 0):.0f} ms"))
     if m.get("total_cost_usd"):
         parts.append(_metric_card("总成本", f"${m['total_cost_usd']:.4f}"))
     parts.append("</div>")
@@ -374,6 +436,8 @@ def render_html_report(rep: "EvalReport") -> str:
 
     # 索引层排在 PDF 解析结果之前：它决定了后面所有数字的可信度
     parts.append(_render_index_layer(rep))
+    # 检索层紧随其后：三层结构里它是 ②，此前报告中缺席
+    parts.append(_render_retrieval_layer(rep))
     parts.append(_render_parse_section(rep))
 
     # --- 分题型 ---
@@ -418,6 +482,42 @@ def render_html_report(rep: "EvalReport") -> str:
             f"（共 {adv.get('total_mutations', 0)} 个变异）。"
             f"检出率低的类型不代表自检没用，而说明**该类错误超出了现有检查的设计范围**——"
             f"例如纯文字编造需要句级支撑度或人工复核，报告里已如实标出。</p>"
+        )
+
+    # --- 噪声鲁棒性 ---
+    noise = rep.noise or {}
+    if noise.get("levels"):
+        parts.append("<h2>③ 噪声鲁棒性：噪声到达什么强度，系统开始不可靠</h2>")
+        path = noise.get("path")
+        if path:
+            # 这条曲线可不可复现，取决于走的是哪条作答路径。
+            # 不写出来，读者会把一条带模型采样的曲线当成确定性结果。
+            label = "抽取式（无模型，确定性）" if path == "extractive" else "生成模型（有采样波动）"
+            parts.append(f"<p class='sub'>作答路径：<b>{_esc(label)}</b></p>")
+        parts.append(
+            "<p class='sub'>在**切分之前**污染正文块，再重建索引与问答，"
+            "观察准确率随噪声的变化。这是整套交付里最该有、也最容易被跳过的一张表："
+            "它把「证据被污染时系统会自信地答错」这个固有边界量化出来，"
+            "而不是留给读者想象。</p>"
+        )
+        parts.append(
+            "<table><tr><th>配置噪声 level</th><th>实际 CER</th><th>通过 / 题数</th>"
+            "<th>准确率</th><th>自检放行率</th><th>拒答精确率</th></tr>"
+        )
+        for lv in noise["levels"]:
+            parts.append(
+                f"<tr><td class='num'>{lv['level']:.2f}</td>"
+                f"<td class='num'>{_pct(lv['actual_cer'])}</td>"
+                f"<td class='num'>{lv['passed']} / {lv['items']}</td>"
+                f"<td class='num'>{_pct(lv['accuracy'])}</td>"
+                f"<td class='num'>{_pct(lv['gate_pass_rate'])}</td>"
+                f"<td class='num'>{_pct(lv['refusal_precision'])}</td></tr>"
+            )
+        parts.append("</table>")
+        parts.append(
+            f"<p class='sub'>结论要说的话在方法里：{_esc(noise.get('method', ''))}"
+            "注意「实际 CER ≠ 配置 level」——注入是逐字符按概率进行的，"
+            "形近字表覆盖不到的字会走别的分支，所以两列都给。</p>"
         )
 
     # --- 逐题 ---

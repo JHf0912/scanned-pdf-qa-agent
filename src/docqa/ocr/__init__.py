@@ -14,6 +14,7 @@ from .base import OcrEngine, OcrEngineInfo, load_prompt
 from .cache import OcrCache, Provenance, cache_key, prompt_sha256
 from .fixture import FixtureOcrEngine
 from .spotcheck import ClaimDiff, diff_claims, evaluate_spotcheck, spotcheck_page
+from .textlayer import TextLayerEngine
 from .vlm import VlmOcrEngine
 
 __all__ = [
@@ -26,6 +27,7 @@ __all__ = [
     "load_prompt",
     "VlmOcrEngine",
     "FixtureOcrEngine",
+    "TextLayerEngine",
     "ClaimDiff",
     "diff_claims",
     "spotcheck_page",
@@ -34,9 +36,15 @@ __all__ = [
     "build_engine",
 ]
 
-# 已注册的引擎名。local 是预留位：日后接入本地 ONNX 引擎
-# （如 RapidOCR / RapidTable）时在此注册即可，ingest 无需改动。
-_REGISTRY = ("vlm", "fixture", "local")
+# 已注册的引擎名。
+#   vlm       —— 主路径（视觉模型）
+#   fixture   —— 仅测试（预置结果，机械隔离）
+#   textlayer —— 原生文本层（不调用模型）
+#   local     —— 预留位：日后接入本地 ONNX 引擎（RapidOCR 等）时在此注册即可。
+#
+# 注意 `textlayer` **不是**用户可选的主引擎：它由 `ingest` 按页类型自动使用，
+# 因为"这一页有没有文本层"是 PDF 的客观属性，不该让人去选。
+_REGISTRY = ("vlm", "fixture", "textlayer", "local")
 
 
 def available_engines() -> tuple[str, ...]:
@@ -50,13 +58,16 @@ def build_engine(
     prompt_path: Path | None = None,
     fixtures_dir: Path | None = None,
     provider_cfg: ProviderConfig | None = None,
+    pdf_path: Path | None = None,
 ) -> OcrEngine:
     """按名字构造 OCR 引擎。
 
     Args:
-        name: "vlm"（主路径）/ "fixture"（仅测试）/ "local"（预留，未实现）
+        name: "vlm"（主路径）/ "fixture"（仅测试）/ "textlayer"（原生文本层）/
+            "local"（预留，未实现）
         provider_cfg: 覆盖默认的 provider 配置。用于构造**第二引擎**
             （跨引擎一致性校验）——它走 `cfg.ocr2` 而不是 `cfg.ocr`。
+        pdf_path: `textlayer` 引擎需要它来读文本层（页图之外还要访问 PDF 本身）。
     """
     if name not in _REGISTRY:
         raise ConfigError(f"未知的 OCR 引擎 {name!r}。可用：{list(_REGISTRY)}")
@@ -65,6 +76,14 @@ def build_engine(
         if fixtures_dir is None:
             raise ConfigError("fixture 引擎需要 --fixtures-dir 指定预置结果目录。")
         return FixtureOcrEngine(fixtures_dir)
+
+    if name == "textlayer":
+        if pdf_path is None:
+            raise ConfigError(
+                "textlayer 引擎需要知道 PDF 路径（它直接读文件，不读页图）。\n"
+                "调用方应传 pdf_path；`ingest` 会自动按页类型启用它，无需手动指定。"
+            )
+        return TextLayerEngine(pdf_path)
 
     if name == "local":
         raise ConfigError(

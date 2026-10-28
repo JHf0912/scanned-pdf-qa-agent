@@ -27,13 +27,9 @@ from rich.text import Text
 
 from .config import PROJECT_ROOT, Config, load_config, load_domain, missing_ocr_message
 from .detect import pages_needing_ocr, profile_pdf
-from .errors import (
-    EXIT_CONFIG,
-    EXIT_REGRESSION,
-    DocqaError,
-    RegressionDetected,
-)
-from .logging import get_logger, setup as setup_logging
+from .errors import EXIT_REGRESSION, DocqaError
+from .logging import get_logger
+from .logging import setup as setup_logging
 from .models import AnswerBundle
 
 app = typer.Typer(
@@ -43,6 +39,24 @@ app = typer.Typer(
 )
 console = Console()
 _log = get_logger("cli")
+
+
+def _version_callback(value: bool) -> None:
+    if value:
+        from . import __version__
+
+        typer.echo(f"docqa {__version__}")
+        raise typer.Exit()
+
+
+@app.callback()
+def _main_callback(
+    version: bool = typer.Option(
+        False, "--version", callback=_version_callback, is_eager=True,
+        help="显示版本号后退出。",
+    ),
+) -> None:
+    """扫描版 PDF 智能文档问答 Agent。"""
 
 
 def _cfg(require_ocr: bool = False) -> Config:
@@ -122,6 +136,16 @@ def doctor(
         t.add_row("第二 OCR 引擎", "[green]已配置[/green]",
                   f"{cfg.ocr2.describe()}（跨引擎校验生效，每页多识别一次，成本翻倍）")
 
+    # 成本估算是否可信。**不填价格时报告里的成本恒为 0**——
+    # 那不是"很便宜"，而是"没算"。这一行存在的意义是别让 0 被读成 0。
+    priced = [name for name, p in (("OCR", cfg.ocr), ("第二引擎", cfg.ocr2), ("生成", cfg.llm))
+              if p.configured and (p.price_in_per_mtok or p.price_out_per_mtok)]
+    if not priced:
+        t.add_row("成本估算", "[yellow]未启用[/yellow]",
+                  "未填任何 DOCQA_*_PRICE_IN/OUT；报告里的成本会恒为 0（是没算，不是免费）")
+    else:
+        t.add_row("成本估算", "[green]已启用[/green]", f"已计价端点：{'、'.join(priced)}")
+
     console.print(t)
 
     if not cfg.has_ocr:
@@ -150,12 +174,13 @@ def prove_vision(cfg: Config) -> tuple[bool, str]:
     这一步存在的意义：把"配置写对了"和"功能真的可用"分开。
     只检查配置项是否填写，会在密钥正确但模型不支持图像时给出虚假的通过。
     """
-    import base64
     import io
+    import shutil
+    import tempfile
+    import uuid
+    from pathlib import Path as _Path
 
     from PIL import Image, ImageDraw
-
-    from .llm import ImagePart, build_provider
 
     # 合成一张测试图：白底 + 蓝色矩形 + 一个醒目的数字
     img = Image.new("RGB", (320, 160), "white")
@@ -165,74 +190,95 @@ def prove_vision(cfg: Config) -> tuple[bool, str]:
     buf = io.BytesIO()
     img.save(buf, format="PNG")
 
-    tmp = PROJECT_ROOT / "data" / "derived" / "_vision_probe.png"
-    tmp.parent.mkdir(parents=True, exist_ok=True)
-    tmp.write_bytes(buf.getvalue())
-
+    # 探针图必须落在**系统临时目录**，而不是 `data/derived/`。
+    #
+    # 原先写进 `data/derived/` 有两个后果：
+    #   1. 只读安装、容器只读挂载、CI 里的只读检出，`doctor` 会直接 PermissionError——
+    #      而那恰恰是最需要 `doctor` 给出可操作诊断的场景；
+    #   2. 探针图是诊断用的临时物，混进产物目录会让"产物目录只放 ingest 产物"这条
+    #      约定出现例外，日后审计溯源链时会被当成一份来历不明的页图。
+    #
+    # 这里**刻意不用 `tempfile.TemporaryDirectory`**：它内部以 `mode=0o700` 建目录，
+    # 而 Windows 上的 0o700 会生成**受保护的 DACL**（只有 OWNER RIGHTS/SYSTEM/
+    # Administrators，且不再继承父目录）。在降权运行的沙箱或 CI 容器里，
+    # 当前身份不算 OWNER RIGHTS，于是刚建出来的目录**自己都写不进去**——
+    # 那样 `doctor` 会在最该给出诊断的地方抛 PermissionError。
+    # 用普通 `mkdir()` 得到的是继承父目录的正常权限。
+    probe_dir = _Path(tempfile.gettempdir()) / f"docqa-vision-probe-{uuid.uuid4().hex[:8]}"
+    probe_dir.mkdir(parents=True, exist_ok=True)
+    tmp = probe_dir / "_vision_probe.png"
     try:
-        provider = build_provider(cfg.ocr, timeout=cfg.http_timeout,
-                                 max_retries=1, what="OCR 识别")
-        part = ImagePart.from_path(tmp)
-        # max_tokens 必须给足。**推理模型**会先把 token 花在思考上再写答案，
-        # 给小了（比如 64）会得到 finish_reason="length" 且 content 为空——
-        # 那看起来和"模型没读图"一模一样，但完全是两回事。
-        # 实测：64 → 空内容；1024 → 正确答出 "7391,蓝色"。
-        resp = provider.complete(
-            "你是一个图像识别工具。只回答被问到的内容，不要解释。",
-            "这张图里的数字是多少？另外，左侧的大矩形是什么颜色？只回一行，格式：数字,颜色",
-            images=[part],
-            max_tokens=2048,
-            temperature=0.0,
-        )
-        text = resp.text.strip()
-
-        # --- 先排除"不是视觉能力问题"的几种情况，再下"看不看得见"的结论 ---
-        #
-        # 这个顺序很关键。最初的实现只看 content 是否为空，于是把
-        # "被 token 上限截断"误报成了"模型不支持图像"，
-        # 让使用者去换一个本来没问题的模型。**错误的诊断比没有诊断更浪费时间。**
-        if not text and resp.truncated:
-            return False, (
-                "[red]响应被 token 上限截断，没能得出答案。[/red]\n\n"
-                "finish_reason=length，输出 token 全部消耗在推理阶段。\n\n"
-                "这**不是**「模型不支持图像」，而是 max_tokens 给小了。\n"
-                "若该模型是推理模型，扫描件识别需要显著更大的 max_tokens"
-                "（本项目 OCR 默认 8000）。"
-            )
-        if not text:
-            reasoning = (resp.reasoning or "").strip()
-            return False, (
-                f"[red]模型返回了空内容（finish_reason={resp.finish_reason}）。[/red]\n"
-                + (f"但思维链里有内容，说明它**可能读到了图**，只是没写进正式输出：\n"
-                   f"  {reasoning[:200]}\n\n" if reasoning else "")
-                + "请检查该端点的响应格式是否符合 OpenAI 兼容约定。"
-            )
-
-        got_number = "7391" in text
-        got_color = any(w in text for w in ("蓝", "blue", "Blue"))
-        if got_number and got_color:
-            return True, (
-                f"[green]端点确实支持图像输入。[/green]\n"
-                f"模型回答：{text}\n"
-                f"识别到数字 7391 与蓝色矩形 —— 只有真正读到图才能答对。"
-            )
-        if got_number or got_color:
-            return False, (
-                f"[yellow]端点部分答对，视觉能力存疑。[/yellow]\n"
-                f"模型回答：{text}\n"
-                f"期望同时识别出 7391 与蓝色。可能是图像分辨率或提示词问题，建议换模型。"
-            )
-        return False, (
-            f"[red]端点没有正确识别出测试图的内容。[/red]\n"
-            f"模型回答：{text}\n\n"
-            f"这可能是**纯文本模型**——它会静默忽略图片、返回一段看似合理的文字。\n"
-            f"请改用真正支持视觉的模型（如带 -vl / -vision 后缀的多模态模型）。\n"
-            f"注意：只填了模型名不代表它能看图。"
-        )
+        tmp.write_bytes(buf.getvalue())
+        return _probe_with_image(tmp, cfg)
     except DocqaError as exc:
         return False, f"[red]调用失败：[/red]\n{exc}"
     finally:
-        tmp.unlink(missing_ok=True)
+        shutil.rmtree(probe_dir, ignore_errors=True)
+
+
+def _probe_with_image(tmp, cfg: Config) -> tuple[bool, str]:
+    """发出探针请求并按响应判断视觉能力。从 `prove_vision` 拆出来，便于测试替身。"""
+    from .llm import ImagePart, build_provider
+
+    provider = build_provider(cfg.ocr, timeout=cfg.http_timeout,
+                             max_retries=1, what="OCR 识别")
+    part = ImagePart.from_path(tmp)
+    # max_tokens 必须给足。**推理模型**会先把 token 花在思考上再写答案，
+    # 给小了（比如 64）会得到 finish_reason="length" 且 content 为空——
+    # 那看起来和"模型没读图"一模一样，但完全是两回事。
+    # 实测：64 → 空内容；1024 → 正确答出 "7391,蓝色"。
+    resp = provider.complete(
+        "你是一个图像识别工具。只回答被问到的内容，不要解释。",
+        "这张图里的数字是多少？另外，左侧的大矩形是什么颜色？只回一行，格式：数字,颜色",
+        images=[part],
+        max_tokens=2048,
+        temperature=0.0,
+    )
+    text = resp.text.strip()
+
+    # --- 先排除"不是视觉能力问题"的几种情况，再下"看不看得见"的结论 ---
+    #
+    # 这个顺序很关键。最初的实现只看 content 是否为空，于是把
+    # "被 token 上限截断"误报成了"模型不支持图像"，
+    # 让使用者去换一个本来没问题的模型。**错误的诊断比没有诊断更浪费时间。**
+    if not text and resp.truncated:
+        return False, (
+            "[red]响应被 token 上限截断，没能得出答案。[/red]\n\n"
+            "finish_reason=length，输出 token 全部消耗在推理阶段。\n\n"
+            "这**不是**「模型不支持图像」，而是 max_tokens 给小了。\n"
+            "若该模型是推理模型，扫描件识别需要显著更大的 max_tokens"
+            "（本项目 OCR 默认 8000）。"
+        )
+    if not text:
+        reasoning = (resp.reasoning or "").strip()
+        return False, (
+            f"[red]模型返回了空内容（finish_reason={resp.finish_reason}）。[/red]\n"
+            + (f"但思维链里有内容，说明它**可能读到了图**，只是没写进正式输出：\n"
+               f"  {reasoning[:200]}\n\n" if reasoning else "")
+            + "请检查该端点的响应格式是否符合 OpenAI 兼容约定。"
+        )
+
+    got_number = "7391" in text
+    got_color = any(w in text for w in ("蓝", "blue", "Blue"))
+    if got_number and got_color:
+        return True, (
+            f"[green]端点确实支持图像输入。[/green]\n"
+            f"模型回答：{text}\n"
+            f"识别到数字 7391 与蓝色矩形 —— 只有真正读到图才能答对。"
+        )
+    if got_number or got_color:
+        return False, (
+            f"[yellow]端点部分答对，视觉能力存疑。[/yellow]\n"
+            f"模型回答：{text}\n"
+            f"期望同时识别出 7391 与蓝色。可能是图像分辨率或提示词问题，建议换模型。"
+        )
+    return False, (
+        f"[red]端点没有正确识别出测试图的内容。[/red]\n"
+        f"模型回答：{text}\n\n"
+        f"这可能是**纯文本模型**——它会静默忽略图片、返回一段看似合理的文字。\n"
+        f"请改用真正支持视觉的模型（如带 -vl / -vision 后缀的多模态模型）。\n"
+        f"注意：只填了模型名不代表它能看图。"
+    )
 
 
 # ---------------------------------------------------------------- detect
@@ -422,7 +468,8 @@ def _print_bundle(bundle: AnswerBundle) -> None:
             t.add_column("取值")
             t.add_column("出处")
             for i, c in enumerate(bundle.candidates, start=1):
-                t.add_row(str(i), Text(c.interpretation), Text(c.value), Text(c.citation.render()))
+                t.add_row(str(i), Text(c.interpretation), Text(c.value),
+                          Text(c.citation.render(bundle.citation_template)))
             console.print(t)
     else:
         # 无模型降级时 answer 就是 OCR 出来的**文档原文**，同样不能过 markup 解析
@@ -434,7 +481,8 @@ def _print_bundle(bundle: AnswerBundle) -> None:
         t.add_column("chunk")
         t.add_column("证据片段", overflow="fold")
         for c in bundle.citations:
-            t.add_row(Text(c.render()), Text(c.chunk_id), Text(c.quote[:120]))
+            t.add_row(Text(c.render(bundle.citation_template)),
+                      Text(c.chunk_id), Text(c.quote[:120]))
         console.print(t)
 
     v = bundle.verification
@@ -547,8 +595,27 @@ def eval_cmd(
     report: Path = typer.Option(PROJECT_ROOT / "out" / "eval_report.html", "--report",
                                 help="HTML 报告路径"),
     json_out: Path | None = typer.Option(None, "--json-out"),
-    baseline: Path | None = typer.Option(None, "--baseline", help="回归基线 JSON"),
+    baseline: Path | None = typer.Option(
+        None, "--baseline",
+        help="回归基线 JSON：任何指标下滑都非零退出（退出码 5），可直接挂 CI。",
+    ),
+    save_baseline: Path | None = typer.Option(
+        None, "--save-baseline",
+        help="把本次评估写成基线文件。**这是基线的产出端**——"
+             "在此之前只有比对端，于是'可挂 CI 的回归门禁'只能发现问题、没法建立基准。",
+    ),
     adversarial: bool = typer.Option(True, "--adversarial/--no-adversarial"),
+    noise_sweep: int = typer.Option(
+        0, "--noise-sweep",
+        help="OCR 噪声鲁棒性扫描：跑 N 档噪声（0=关闭，建议 3）。"
+             "纯本地文本变换、无额外模型调用，但每档都会把整套题重跑一遍。",
+    ),
+    no_llm: bool = typer.Option(
+        False, "--no-llm",
+        help="强制走抽取式（不调用生成模型）。**建立基线时必须用它**——"
+             "模型输出有波动，会让同一份代码的评估结果在 12/13 之间跳，"
+             "那样的数字不能当回归基准。",
+    ),
     transcription: Path | None = typer.Option(
         None, "--transcription",
         help="人工校对的转写基准（如 data/golden/transcription.md）。"
@@ -558,8 +625,10 @@ def eval_cmd(
 ) -> None:
     """跑评估，产出指标报告与回归比对。"""
     from .eval import load_golden, run_eval
+    from .eval.noise import actual_cer
     from .eval.runner import compare_baseline
-    from .llm import build_llm_provider
+    from .eval.runner import save_baseline as save_baseline_fn
+    from .llm import NullProvider, build_llm_provider
     from .pipeline import load_result
     from .qa import QaAgent
     from .report import render_html_report
@@ -580,7 +649,26 @@ def eval_cmd(
         console.print(f"[red]读取产物失败：{exc}[/red]")
         raise typer.Exit(2) from exc
 
-    agent = QaAgent(result.index, build_llm_provider(cfg), cfg, profile,
+    # 强制抽取式（`--no-llm`）。
+    #
+    # 为什么必须有这个开关
+    # --------------------
+    # 配了生成模型的机器上，同一份产物、同一套题、同一份代码，**评估结果会变**：
+    # 模型输出天然有波动（即使 temperature=0，供应商侧的批处理与版本也可能变），
+    # 而这里的判分是逐题判"必须包含哪些字串"，一点措辞差异就会翻转结论。
+    # 实测同一台机器连跑三次：13 / 12 / 13 题通过。
+    #
+    # 于是"回归基线"就不成立了——一个会自己变的数字不能当基准。
+    # CI 上更明显：它没有密钥，本来就走抽取式，数值与本地（有密钥）完全不可比，
+    # 而 `compare_baseline` 只拦"引擎不同"，拦不住"生成路径不同"。
+    #
+    # 所以基线必须钉在**确定性**的那条路径上：抽取式（答案字面上就是证据）。
+    # 它也是唯一能跨机器复现的路径。
+    provider = NullProvider(cfg.llm) if no_llm else build_llm_provider(cfg)
+    if no_llm:
+        console.print("[yellow]已强制抽取式（--no-llm）：结果为确定性，可用于建立基线[/yellow]")
+
+    agent = QaAgent(result.index, provider, cfg, profile,
                     failed_pages=result.failed_pages, doc_id=result.doc_id)
 
     items = load_golden(golden)
@@ -657,6 +745,94 @@ def eval_cmd(
                 support_gate=profile.qa.support_score_gate,
             )
 
+    # --- 噪声鲁棒性扫描（可选）---
+    #
+    # 这是设计里最该有、却一直没接进 CLI 的一项：`eval/noise.py` 有注入函数，
+    # 但只有单元测试调用它，报告的 `noise` 键永远是空的——
+    # 于是"噪声到什么强度系统开始不可靠"这个问题**从来没有被回答过**，
+    # 而那恰恰是这套机制本来要回答的问题。
+    #
+    # 成本为零：污染是纯本地文本变换，不额外调用任何模型。
+    # 但**代价是调用次数 × 档位数**（每个档位都要把整套题重跑一遍），
+    # 所以默认关闭，且默认只跑 3 档而不是全部。
+    if noise_sweep:
+        from .chunker import chunk_document
+        from .eval.noise import DEFAULT_LEVELS, NoiseConfig, perturb_pages
+        from .index import HybridIndex
+
+        levels = DEFAULT_LEVELS
+        if noise_sweep > 0:
+            # 取均匀分布的 n 档，且**总是包含 0.0**（基线要与它比）
+            step = max(1, len(levels) // noise_sweep)
+            chosen = levels[::step][:noise_sweep]
+            levels = tuple(sorted(set((0.0,) + chosen)))
+        console.print(
+            f"[bold]噪声扫描[/bold] {len(levels)} 档 × 每题一次问答 "
+            f"（level={', '.join(f'{x:.2f}' for x in levels)}，纯本地变换、无额外模型调用）"
+        )
+        noise_report: dict = {"levels": [], "seed": 0, "method": (
+            "在切分之前污染正文块，再重建索引与问答 Agent；表格块不污染。"
+            "同档位的实际 CER 一并报出，因为实际改动量并不等于配置的 level。"
+        )}
+        # 曲线走的是哪条作答路径，必须写进产物。
+        # 生成模型的输出天然有波动，同一条命令两次跑出的点不同——
+        # 那样的曲线不可复现，也不能与抽取式的数字混在一起看。
+        # 只把 provider 传对还不够：**读者看到报告时得知道自己是哪一种**。
+        noise_report["path"] = "extractive" if no_llm else "llm"
+        for level in levels:
+            cfg_n = NoiseConfig(level=level, seed=0)
+            polluted = perturb_pages(result.pages, cfg_n)
+            chunks_n, _ = chunk_document(polluted, result.doc_id, profile)
+            index_n = HybridIndex(chunks_n, profile)
+            # 复用主评估那一个 provider：`--no-llm` 必须一路传到噪声档位，
+            # 否则噪声曲线是在"有模型"下画的，既不可复现也与主结果不同源。
+            agent_n = QaAgent(index_n, provider, cfg, profile,
+                              failed_pages=result.failed_pages, doc_id=result.doc_id)
+            sub = run_eval(
+                items, agent_n.answer,
+                engine=str(engine_name), doc_id=result.doc_id, domain=domain,
+                notes=[], pages=polluted, manifest=result.manifest,
+            )
+            actual = actual_cer(
+                "".join(p.plain_text() for p in result.pages), cfg_n
+            )
+            noise_report["levels"].append({
+                "level": level,
+                "actual_cer": round(actual, 4),
+                "accuracy": round(sub.metrics["accuracy"], 4),
+                "refusal_precision": round(sub.metrics["refusal_precision"], 4),
+                "refusal_recall": round(sub.metrics["refusal_recall"], 4),
+                "gate_pass_rate": round(sub.metrics.get("gate_pass_rate", 0.0), 4),
+                "passed": sub.metrics["passed"],
+                "items": sub.metrics["items"],
+            })
+            console.print(
+                f"  level={level:.2f}（实际 CER {actual:.2%}）→ "
+                f"{sub.metrics['passed']}/{sub.metrics['items']} 通过"
+            )
+        rep.noise = noise_report
+        # 噪声结论必须进报告正文，而不是只留在 JSON 里
+        low = [x for x in noise_report["levels"] if x["level"] == 0.0]
+        if low:
+            base_acc = low[0]["accuracy"]
+            broken = [x for x in noise_report["levels"]
+                      if x["accuracy"] < base_acc - 0.2]
+            if broken:
+                notes.append(
+                    f"噪声结论：基线（无污染）准确率 {base_acc:.0%}；"
+                    f"实际 CER 达到 {broken[0]['actual_cer']:.1%} 时降到 "
+                    f"{broken[0]['accuracy']:.0%}（跌破 20 个百分点）。"
+                    f"这条曲线是**这类系统的固有边界**——污染之下系统无从知道真相，"
+                    f"所以要据此决定哪些高风险字段必须转人工复核。"
+                )
+            else:
+                notes.append(
+                    f"噪声结论：在实测的噪声档位内（最高实际 CER "
+                    f"{(noise_report['levels'][-1]['actual_cer'] if noise_report['levels'] else 0):.1%}），"
+                    f"准确率未出现 20 个百分点以上的下滑。"
+                    f"这不代表系统抗噪——只是这次注入的字符恰好不在答案略上。"
+                )
+
     # --- 产物先落盘，再打印摘要 ---
     #
     # 顺序不是风格问题。摘要只是给人看的，**产物才是结果**；
@@ -690,11 +866,32 @@ def eval_cmd(
     t.add_column("指标")
     t.add_column("值")
     for k in ("items", "passed", "accuracy", "refusal_precision", "refusal_recall",
-              "citation_validity_rate", "mean_context_utilization", "mean_attempts",
-              "total_cost_usd"):
+              "gate_pass_rate", "citation_validity_rate", "mean_context_utilization",
+              "mean_attempts", "latency_p50_ms", "total_cost_usd"):
+        if k not in rep.metrics:
+            continue
         v = rep.metrics.get(k)
         t.add_row(k, f"{v:.4f}" if isinstance(v, float) else str(v))
     console.print(t)
+
+    # 检索层单独一张表：它是三层评估的 ②，不该只作为几个浮点数混在主表里
+    ret = rep.retrieval or {}
+    if ret.get("n"):
+        tr = Table(title=f"② 检索层（n={ret['n']} 题，k={ret.get('k', 10)}）",
+                   show_header=True, header_style="bold")
+        tr.add_column("题型")
+        tr.add_column("n")
+        tr.add_column("Recall@k")
+        tr.add_column("MRR")
+        tr.add_column("nDCG@k")
+        for cat, d in (ret.get("per_category") or {}).items():
+            tr.add_row(cat, str(d["n"]), f"{d['recall_at_k']:.0%}",
+                       f"{d['mrr']:.3f}", f"{d['ndcg_at_k']:.3f}")
+        tr.add_row("[bold]总体[/bold]", str(ret["n"]),
+                   f"{rep.metrics.get('retrieval_recall_at_k', 0):.0%}",
+                   f"{rep.metrics.get('retrieval_mrr', 0):.3f}",
+                   f"{rep.metrics.get('retrieval_ndcg_at_k', 0):.3f}")
+        console.print(tr)
 
     t2 = Table(title="按题型分组（总体值会被数量多的题型拉平）", show_header=True)
     t2.add_column("题型")
@@ -732,13 +929,24 @@ def eval_cmd(
     if json_out:
         console.print(f"JSON 结果：{json_out}")
 
+    # --- 基线：先写，再比 ---
+    #
+    # 顺序不能反：同一次运行既 `--save-baseline` 又 `--baseline` 时，
+    # 先写会把"要跟谁比"的那个文件覆盖掉，比对就变成了自己跟自己比（永远无下滑）。
+    # 这是一个会**静默失效**的门禁，所以先比后写。
     if baseline:
         regressions = compare_baseline(rep, baseline)
         if regressions:
             console.print(Panel("指标相对基线下滑：\n" + "\n".join(regressions),
                                 title="[red]回归[/red]", border_style="red"))
+            # 回归时仍然写基线？不。失败的一轮不该成为下一次的基准。
             raise typer.Exit(EXIT_REGRESSION)
         console.print("[green]与基线相比无下滑[/green]")
+
+    if save_baseline:
+        save_baseline_fn(rep, save_baseline)
+        console.print(f"[green]基线已写入[/green] {save_baseline}"
+                      f"（引擎 {rep.engine}，可直接用于 --baseline）")
 
 
 # ---------------------------------------------------------------- serve

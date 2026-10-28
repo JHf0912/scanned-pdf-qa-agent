@@ -23,7 +23,6 @@ from docqa.detect import (
 )
 from docqa.errors import PdfUnreadableError
 
-
 # ---------------------------------------------------------------- 合成件
 
 def _jpeg(width: int, height: int, color: tuple[int, int, int]) -> bytes:

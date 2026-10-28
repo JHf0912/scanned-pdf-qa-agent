@@ -32,8 +32,8 @@ from dataclasses import dataclass
 
 from ..config import QaConfig
 from ..logging import get_logger
-from ..models import Chunk, ClarificationOption, Citation, RefusalReason
-from .verify import extract_claims, normalize
+from ..models import Chunk, Citation, ClarificationOption, RefusalReason
+from .verify import normalize
 
 _log = get_logger("qa.policy")
 
@@ -245,7 +245,7 @@ def detect_ambiguity(
         return []
 
     candidates: list[ClarificationOption] = []
-    for chunk, score in hits[:max_candidates]:
+    for chunk, _score in hits[:max_candidates]:
         # 唯一有区分度的判据：候选必须与问题实质相关
         if _query_overlap(question, chunk.text) < AMBIGUITY_MIN_QUERY_OVERLAP:
             continue
@@ -376,6 +376,32 @@ def decide(
                 f"证据相关性不足。已附上最相关的片段供人工判断。"
             ),
         )
+
+    # 7) 第一名与第二名咬得太紧（可选，默认关闭）
+    #
+    # 这一条解决的是**另一种**不确定性：分数都不低，但没有明确赢家。
+    # 典型形态是两份文件对同一件事的规定不同，或同一份文档里
+    # "3.4 允许倒圆"与"3.7 允许不倒圆"这类互相限定的条款。
+    # 此时给一个答案比不给更危险——读者会以为系统已经判断过哪一条适用。
+    #
+    # `second_score` 在此之前是**传进来却没人读**的：索引层算好、四处调用点
+    # 一路传参、`decide()` 收下就丢掉。而 `min_score_margin` 更彻底——
+    # 在 config 与 YAML 里声明着，全仓零处读取。两个"看起来能用"的旋钮
+    # 加起来等于没有。现在它们各自有明确分工：`min_top_score` 管绝对下限，
+    # `min_score_margin` 管相对差距。
+    if cfg.min_score_margin > 0 and second_score > 0:
+        margin = top_score - second_score
+        if margin < cfg.min_score_margin:
+            return Decision(
+                refused=True,
+                reason=RefusalReason.LOW_CONFIDENCE,
+                detail=(
+                    f"最相关的两段证据分数接近（{top_score:.4f} vs {second_score:.4f}，"
+                    f"差距 {margin:.4f} < {cfg.min_score_margin}），"
+                    f"系统无法判断哪一段才是你要问的。"
+                    f"建议补充限定条件（条款号、表格列名或文件版本）后重问。"
+                ),
+            )
 
     return Decision(refused=False)
 

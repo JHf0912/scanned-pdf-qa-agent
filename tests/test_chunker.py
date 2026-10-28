@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-from docqa.chunker import chunk_document, split_sentences
 from conftest import make_block, make_page
+from docqa.chunker import chunk_document, split_sentences
 
 
 class TestStructuredChunking:

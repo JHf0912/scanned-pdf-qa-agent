@@ -64,6 +64,29 @@ class TestRender:
         images = render_pages(scanned_pdf, tmp_path / "out", page_count=1)
         assert json.dumps(describe(images), ensure_ascii=False)
 
+    def test_jpeg_quality_actually_takes_effect(self, scanned_pdf, tmp_path):
+        """`jpeg_quality` 曾是死开关：配置里声明，代码里硬编码 90。
+
+        验证方式不能是"读一下配置等于 10"——那只能证明被赋值了，
+        证明不了它被**使用**。所以这里比较两次真实光栅化的产物字节数：
+        质量 10 与 95 在同一张页图上必然产出不同大小的 JPEG。
+        """
+        lo = render_pages(
+            scanned_pdf, tmp_path / "lo", page_count=1,
+            config=RenderConfig(mode="raster", image_format="jpg", jpeg_quality=10),
+        )
+        hi = render_pages(
+            scanned_pdf, tmp_path / "hi", page_count=1,
+            config=RenderConfig(mode="raster", image_format="jpg", jpeg_quality=95),
+        )
+        assert lo[0].path.suffix == ".jpg"
+        size_lo = lo[0].path.stat().st_size
+        size_hi = hi[0].path.stat().st_size
+        assert size_hi > size_lo, (
+            f"质量 95 的产物（{size_hi}B）不比质量 10（{size_lo}B）大，"
+            f"说明 jpeg_quality 没有真正传给编码器"
+        )
+
 
 class TestOcrCache:
     def test_key_is_deterministic(self):

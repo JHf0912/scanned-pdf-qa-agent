@@ -88,6 +88,17 @@ class LLMResponse:
         模型即使被要求"只输出 JSON"，也常会包一层 ```json 代码块。
         这里做容错，但**不做"猜"**——解析不出来就抛出原始文本，
         由调用方决定是重试还是降级。
+
+        **容错分两档，第二档是实测逼出来的**：
+        `json.loads` 默认 `strict=True`，会拒绝字符串内部的裸控制字符
+        （未转义的换行、制表符）。而模型把多行内容塞进一个 JSON 字符串时，
+        很可能就写成裸换行——那不是"模型没按格式回话"，是**一个只需放宽
+        一处、内容其实完好**的响应。真端点冒烟测试第一次跑就撞上了这个
+        （`Invalid control character at: line 1 column 44`）。
+
+        放宽只针对控制字符，其余语法错误照旧失败：
+        把 `strict=False` 用在**第一次**解析上会让截断的 JSON、缺逗号之类
+        的真错误也被吞掉，所以它只作兜底。
         """
         text = self.text.strip()
         if text.startswith("```"):
@@ -101,6 +112,11 @@ class LLMResponse:
                 text = text[start : end + 1]
         try:
             return json.loads(text)
+        except json.JSONDecodeError:
+            # 第二档：只放宽控制字符。仍然失败才报错。
+            pass
+        try:
+            return json.loads(text, strict=False)
         except json.JSONDecodeError as exc:
             # **一个字都不回显**。OCR 场景下模型输出就是**文档正文的转录**，
             # 回显 500 字符等于把半页文档写进日志——而这个异常还会被
@@ -173,9 +189,9 @@ def classify_status(status: int, body: str) -> ProviderError:
             f"鉴权失败（HTTP {status}）。请检查 .env 中的密钥是否正确、是否过期。"
         )
     if status == 404:
-        return ProviderError(f"接口或模型不存在（HTTP 404）。请检查 base_url 与模型名。")
+        return ProviderError("接口或模型不存在（HTTP 404）。请检查 base_url 与模型名。")
     if status == 400:
-        return ProviderError(f"请求被拒绝（HTTP 400），通常是模型名错误或参数不支持。")
+        return ProviderError("请求被拒绝（HTTP 400），通常是模型名错误或参数不支持。")
     if status in RETRYABLE_STATUS:
         return ProviderError(
             f"服务端暂时不可用（HTTP {status}）。", retryable=True, status=status

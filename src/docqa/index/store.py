@@ -64,8 +64,10 @@ class HybridIndex:
             self.arms.append(LexicalIndex(arm_name, self.chunks))
             self.weights[arm_name] = w
 
-        # 可选的稠密臂：未配置 embedding 端点时**不启用**，
-        # 并在评估报告里如实标注该项缺失，而不是静默当作 0 分。
+        # 稠密检索**尚未实现**。这里给的是一个显式的 False，而不是一个"可配置项"，
+        # 因为报告与 manifest 需要如实记录"这一路没有启用"——
+        # 缺一路信号，与"这一路跑了但没帮上忙"，是两件不能都显示成 0 分的事。
+        # （此前 `enable_dense` 是个打开也不会变的开关：这里硬编码 None，从不读配置。）
         self.dense = None
         self.dense_available = False
 

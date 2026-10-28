@@ -23,10 +23,12 @@ from .config import Config, DomainProfile
 from .detect import pages_needing_ocr, profile_pdf
 from .errors import ConfigError, InputError, PageOcrError
 from .index import HybridIndex
+from .injection import scan_pages
 from .logging import get_logger, stage
-from .models import Chunk, OcrPage, PdfProfile
+from .models import Chunk, OcrPage, PageImage, PdfProfile
 from .ocr import OcrEngine
 from .ocr.spotcheck import spotcheck_page
+from .ocr.textlayer import TextLayerEngine
 from .render import describe as describe_images
 from .render import render_pages
 
@@ -176,33 +178,95 @@ def ingest(
             f"请通过 CLI 运行 `docqa ingest`，或由调用方显式传入引擎。"
         )
 
-    for image in images:
+    # --- 3. 逐页取内容（按页类型选来源，失败隔离）---
+    #
+    # 两条来源，**同一套产物格式**：
+    #   - 有文本层的页 → `TextLayerEngine`（零模型调用，取 PDF 原生文本层）；
+    #   - 没有文本层的页 → 传入的 OCR 引擎（VLM / fixture）。
+    #
+    # 这一步是"支持真实客户文档"的前提。在此之前，管线**只会走 OCR 路径**：
+    # TEXT 页既不渲染也不识别，于是纯 born-digital PDF 切出 0 个片段，
+    # 混合件里文本层那几页整页丢失——而 detect.py 明明把它们判成了 TEXT。
+    # "不送 OCR"这个正确的决定，当时等于"直接丢掉"。
+    text_engine = TextLayerEngine(pdf_path)
+    pages: list[OcrPage] = []
+    failed: set[int] = set()
+    by_text_layer: list[int] = []
+    profiles_by_page = {p.page_no: p for p in pdf_profile.pages}
+    images_by_page = {img.page_no: img for img in images}
+
+    # 需要 OCR 却没有引擎：这是调用方的错误，直接报出来，
+    # 而不是让它以 AttributeError 的形式在几十行之后炸掉。
+    if engine is None and targets:
+        raise ConfigError(
+            f"有 {len(targets)} 页需要 OCR（{targets}），但没有提供 OCR 引擎。\n"
+            f"请通过 CLI 运行 `docqa ingest`，或由调用方显式传入引擎。"
+        )
+
+    def _failed_page(page_no: int, sha: str, exc: Exception) -> OcrPage:
+        """单页失败的统一产物：记录、继续，但不让下游拿到不完整的证据。"""
+        failed.add(page_no)
+        _log.error(
+            "该页内容获取失败，已隔离",
+            extra={"page": page_no, "detail": str(exc)[:300]},
+        )
+        return OcrPage(
+            page_no=page_no,
+            blocks=[],
+            tables=[],
+            image_sha256=sha,
+            provider="textlayer" if page_no not in images_by_page else getattr(engine, "name", ""),
+            model="",
+            prompt_version="",
+            failed=True,
+            error=str(exc)[:500],
+        )
+
+    for prof_page in sorted(pdf_profile.pages, key=lambda p: p.page_no):
+        page_no = prof_page.page_no
+        image = images_by_page.get(page_no)
+
+        if prof_page.kind == "TEXT":
+            # 有真实文本层：直接取字，**不送 OCR**（硬不变量）。
+            try:
+                with stage("textlayer", _log, page=page_no):
+                    page = text_engine.ocr_page(
+                        # TEXT 页没有被渲染，所以没有页图；这里造一个只带页码与
+                        # 哈希占位的 PageImage —— 引擎只用它做溯源标记。
+                        PageImage(
+                            page_no=page_no, path=Path(), sha256=pdf_profile.sha256,
+                            width=0, height=0, dpi=0.0, native=True,
+                        ),
+                        profile=prof_page,
+                    )
+                pages.append(page)
+                by_text_layer.append(page_no)
+            except PageOcrError as exc:
+                pages.append(_failed_page(page_no, pdf_profile.sha256, exc))
+            continue
+
+        # 其余（SCANNED / HYBRID 页）走 OCR 引擎
+        if image is None:
+            # 判为需要识别却没渲染出图：这不该发生，但要如实记下来而不是跳过
+            pages.append(_failed_page(
+                page_no, "", RuntimeError("该页判定需要识别，但没有渲染出页图")
+            ))
+            continue
         try:
-            with stage("ocr", _log, page=image.page_no):
-                page = engine.ocr_page(image, profile=profiles_by_page.get(image.page_no))
+            with stage("ocr", _log, page=page_no):
+                page = engine.ocr_page(image, profile=profiles_by_page.get(page_no))
             pages.append(page)
             if page.failed:
-                failed.add(page.page_no)
+                failed.add(page_no)
         except PageOcrError as exc:
-            # 单页失败被隔离：记录、继续，但不让下游拿到不完整的证据
-            failed.add(image.page_no)
-            _log.error(
-                "该页识别失败，已隔离",
-                extra={"page": image.page_no, "detail": str(exc)[:300]},
-            )
-            pages.append(
-                OcrPage(
-                    page_no=image.page_no,
-                    blocks=[],
-                    tables=[],
-                    image_sha256=image.sha256,
-                    provider=getattr(engine, "name", ""),
-                    model=getattr(engine, "model", ""),
-                    prompt_version="",
-                    failed=True,
-                    error=str(exc)[:500],
-                )
-            )
+            pages.append(_failed_page(page_no, image.sha256, exc))
+
+    text_engine.close()
+    if by_text_layer:
+        _log.info(
+            "部分页面取自文本层，未调用识别模型",
+            extra={"doc": pdf_path.name, "detail": f"第 {by_text_layer} 页"},
+        )
 
     # --- 3b. 跨引擎一致性校验（可选）---
     #
@@ -222,6 +286,12 @@ def ingest(
             image = by_page.get(page.page_no)
             # 主引擎已经失败的页没有可比对象，跳过（它已经进了 failed 集）
             if page.failed or image is None:
+                skipped.append(page.page_no)
+                continue
+            # 文本层页**不参与**跨引擎比对：它的内容不是"识别"出来的，
+            # 拿它去和模型输出比，只会把"模型与文本层不一致"报成可疑字段——
+            # 而文本层恰恰是更可信的那个来源。这类页直接跳过，并计入 skipped。
+            if page.provider == "textlayer":
                 skipped.append(page.page_no)
                 continue
             try:
@@ -264,6 +334,18 @@ def ingest(
         encoding="utf-8",
     )
 
+    # --- 3c. 提示词注入扫描 ---    #
+    # 扫描件是**不可信输入**：一份被构造的文档可以印上"忽略以上指令"。
+    # 模型侧的对策（证据进数据区、系统提示声明它是数据）是必要的，但它**不可观测**——
+    # 从日志里看不出"这一页到底有没有藏指令"。合规场景要的恰恰是可观测：
+    # 哪一页、哪一句、被标成什么。所以在这里扫一遍并落盘。
+    #
+    # 只标记、不拒答：注入短语与正常内容字面上可以完全一样
+    # （"请按上述要求执行"在合同里是正常条款），自动拒答会在大批合法文档上误伤。
+    with stage("injection", _log, doc=pdf_path.name) as info:
+        injection = scan_pages(pages)
+        info["detail"] = f"{injection.n_hits} 处可疑片段"
+
     # --- 4. 切分 ---
     doc_id = _doc_id(pdf_profile)
     with stage("chunk", _log, doc=doc_id) as info:
@@ -304,6 +386,7 @@ def ingest(
             "warnings": {str(p.page_no): p.warnings for p in pages if p.warnings},
         },
         "chunk": chunk_stats,
+        "injection": injection.to_dict(),
         "index": index.to_dict(),
         "usage_total": _sum_usage(pages),
         "elapsed_s": round(time.time() - started, 2),

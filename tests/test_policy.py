@@ -8,6 +8,7 @@
 
 from __future__ import annotations
 
+from docqa.config import load_config
 from docqa.models import Chunk
 from docqa.qa.policy import (
     detect_ambiguity,
@@ -137,3 +138,54 @@ class TestNegativeAnswer:
 
     def test_positive_answer_not_flagged(self):
         assert not is_in_document_negative("本标准规定了包装标志。")
+
+
+class TestScoreMargin:
+    """`min_score_margin` 与 `second_score` 曾经是一对"看起来能用"的旋钮。
+
+    `second_score` 由索引层算出、四处调用点一路传参、`decide()` 收下就丢掉；
+    `min_score_margin` 更彻底——在 `config.py` 与 `config/default.yaml` 里
+    声明着，**全仓零处读取**。两个加起来等于没有。
+
+    这里测的不只是"设了会拒答"，还有**设成 0 时必须完全不介入**：
+    死开关的典型危害是"调了没反应"，而过修的典型危害是"没调也乱拒"，
+    两头都得钉住。
+    """
+
+    def _decide(self, *, margin: float, top: float, second: float):
+        import dataclasses
+
+        from docqa.qa.policy import decide
+
+        cfg = dataclasses.replace(load_config().qa, min_score_margin=margin)
+        return decide(
+            cfg=cfg, top_score=top, second_score=second, gates_passed=True,
+            failed_gate_names=[], evidence_chunks=[mk("c1", "额定载荷 12.5 kN。", "3.1")],
+            failed_pages=set(), candidates=[],
+        )
+
+    def test_margin_closes_refusal_when_scores_are_tight(self):
+        d = self._decide(margin=0.3, top=0.90, second=0.85)   # 差距 0.05 < 0.30
+        assert d.refused
+        assert d.reason.value == "low_confidence"
+        # 提示必须说清"是差距不够"，而不是笼统的"相关性不足"——
+        # 否则用户不知道该怎么办（补限定条件 vs 换个问法）
+        assert "差距" in d.detail
+
+    def test_margin_allows_when_there_is_a_clear_winner(self):
+        d = self._decide(margin=0.3, top=0.90, second=0.10)   # 差距 0.80 > 0.30
+        assert not d.refused, f"有明确赢家却被拒：{d.reason}"
+
+    def test_zero_margin_never_intervenes(self):
+        """默认值 0.0 = 关闭。此时分差再小也不能因此拒答。"""
+        d = self._decide(margin=0.0, top=0.900, second=0.899)
+        assert not d.refused, "关闭状态下仍然介入，等于偷偷改了默认行为"
+
+    def test_no_second_hit_does_not_trigger(self):
+        """只有一条证据时没有"第二名"可言，不该因此拒答。"""
+        d = self._decide(margin=0.3, top=0.90, second=0.0)
+        assert not d.refused
+
+    def test_config_default_is_off(self):
+        """默认必须是关闭的：本语料只有 16 个片段，阈值未标定。"""
+        assert load_config().qa.min_score_margin == 0.0

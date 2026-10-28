@@ -23,8 +23,8 @@ from docqa.cli import app
 from docqa.config import load_config
 from docqa.llm.base import LLMResponse
 from docqa.models import Usage
-from docqa.pipeline import ingest as run_ingest
 from docqa.ocr.fixture import FixtureOcrEngine
+from docqa.pipeline import ingest as run_ingest
 
 runner = CliRunner()
 
@@ -339,3 +339,245 @@ class TestEvalAnswersEachQuestionOnce:
         data = rep.to_dict()
         assert "bundles" not in data and "pages" not in data
         json.dumps(data, ensure_ascii=False)  # 必须可序列化
+
+
+# ============================================================ 缺陷 4：状态泄漏
+class TestRepairHintDoesNotLeakAcrossQuestions:
+    """修复提示是**这一道题**的状态，不能挂在 Agent 实例上。
+
+    原先它存在 `self._repair_hint` 里，而只有"修复轮次用尽"那条出口会清空它。
+    于是一道题修复成功并放行之后，这个提示留在实例上，
+    **下一道题的第一轮起草就带着上一题的修复提示**。
+
+    对 `ask`（一次性进程）影响小，但 `serve` 是长驻进程：一个用户的问题会污染
+    之后所有人的问题，而且使用者完全看不见——这属于"不报错、只是悄悄答错"。
+
+    守这条只能用**提示词内容断言**：从输出上看，被污染的回答依然通顺。
+    """
+
+    @pytest.fixture
+    def rig(self):
+        from docqa.chunker import chunk_document
+        from docqa.config import load_domain
+        from docqa.index import HybridIndex
+        from docqa.models import OcrBlock, OcrPage
+        from docqa.qa import QaAgent
+
+        class _ScriptedProvider:
+            """第 1 次故意给错数值，之后都给对。记录每次收到的 user prompt。"""
+
+            name = "scripted"
+            model = "scripted"
+            supports_vision = False
+
+            def __init__(self):
+                self.seen: list[str] = []
+                self.calls = 0
+
+            def complete(self, system, user, **kw) -> LLMResponse:
+                self.seen.append(user)
+                self.calls += 1
+                text = ("抗拉强度应大于等于 950 MPa。[p.1 §3.1]"
+                        if self.calls == 1
+                        else "抗拉强度应大于等于 590 MPa。[p.1 §3.1]")
+                return LLMResponse(text=text, provider="scripted", model="scripted",
+                                   usage=Usage(calls=1))
+
+            def close(self):
+                pass
+
+        cfg = load_config()
+        profile = load_domain("standard", cfg)
+        blocks = [
+            OcrBlock(block_id="p1-b0", page_no=1, type="clause", order=0,
+                     text="3.1 抗拉强度", clause_label="3.1"),
+            OcrBlock(block_id="p1-b1", page_no=1, type="paragraph", order=1,
+                     text="抗拉强度应大于等于 590 MPa。"),
+        ]
+        page = OcrPage(page_no=1, blocks=blocks, tables=[], image_sha256="x",
+                       provider="t", model="t", prompt_version="v1", usage=Usage())
+        chunks, _ = chunk_document([page], "d", profile)
+        provider = _ScriptedProvider()
+        agent = QaAgent(HybridIndex(chunks, profile), provider, cfg, profile, doc_id="d")
+        return agent, provider
+
+    def test_second_question_gets_a_clean_prompt(self, rig):
+        agent, provider = rig
+
+        first = agent.answer("抗拉强度要求是多少？")
+        # 第 1 题应触发一次修复（第一次故意给错），且最终通过
+        assert "repair" in [t.step for t in first.trace], "第一题没有触发修复，用例前提不成立"
+        calls_after_first = provider.calls
+
+        agent.answer("抗拉强度要求是多少？")
+
+        second_prompt = provider.seen[calls_after_first]
+        assert "【上一次尝试的问题】" not in second_prompt, (
+            "第二题的第一轮起草带上了第一题的修复提示——修复状态在实例上泄漏了"
+        )
+        assert "950" not in second_prompt, "上一题的失败数值出现在了下一题的提示词里"
+
+    def test_agent_has_no_instance_level_repair_state(self, rig):
+        """结构性断言：这个状态不该是实例属性，否则以后很容易又被写回去。"""
+        agent, _ = rig
+        agent.answer("抗拉强度要求是多少？")
+        assert not hasattr(agent, "_repair_hint"), (
+            "修复提示不该挂在 Agent 实例上——它是一道题的状态，不是 Agent 的状态"
+        )
+
+
+# ============================================================ 缺陷 5：拒答口径
+class TestRefusalCountsUseGoldenFlag:
+    """拒答的 TP/FP/FN 必须只认金标题的 `expected_refusal`，不能认 `category`。
+
+    原先用 `category == "no_answer"` 判定，于是**歧义题**（`expected_refusal: true`，
+    系统正确拒答）被算成误拒，拒答精确率被系统性压低（实测 0.40 vs 正确口径 0.60）。
+    把这个错误数字写进了 README、迁移文档与演示报告各一次。
+
+    题型分类是给人看的标签，判分依据必须是金标题里显式的字段。
+    """
+
+    def _bundle(self, *, refused: bool):
+        from docqa.models import AnswerBundle, RefusalReason, VerificationReport
+
+        return AnswerBundle(
+            question="q", answer=None if refused else "答", refused=refused,
+            refusal_reason=RefusalReason.NOT_IN_DOCUMENT if refused else None,
+            verification=VerificationReport(), attempts=1,
+        )
+
+    @pytest.fixture
+    def items(self):
+        from docqa.eval.runner import GoldenItem
+
+        return [
+            # 无答案题：该拒
+            GoldenItem(qid="N1", question="?", category="no_answer", expected_refusal=True),
+            # 歧义题：**同样该拒**，只是题型不同——这正是旧口径出错的地方
+            GoldenItem(qid="A1", question="?", category="ambiguous", expected_refusal=True),
+            # 应答题：不该拒
+            GoldenItem(qid="C1", question="?", category="clause", must_contain=["590"]),
+        ]
+
+    def test_correct_ambiguous_refusal_counts_as_true_positive(self, items):
+        """歧义题的正确拒答必须计入 TP——这是旧口径最直接的错误。"""
+        per_item = [
+            {"qid": "N1", "expected_refusal": True, "refused": True},
+            {"qid": "A1", "expected_refusal": True, "refused": True},
+            {"qid": "C1", "expected_refusal": False, "refused": False},
+        ]
+        tp = sum(1 for d in per_item if d["expected_refusal"] and d["refused"])
+        fp = sum(1 for d in per_item if not d["expected_refusal"] and d["refused"])
+        fn = sum(1 for d in per_item if d["expected_refusal"] and not d["refused"])
+        assert tp == 2, "歧义题的正确拒答没有被计入 TP"
+        assert fp == 0 and fn == 0
+
+    def test_run_eval_reports_precision_from_golden_flag(self, items):
+        """端到端：run_eval 报出的精确率必须与金标口径一致。"""
+        from docqa.eval.runner import run_eval
+
+        answers = {"N1": True, "A1": True, "C1": False}
+
+        def ask(question: str):
+            qid = next(it.qid for it in items if it.question == question)
+            return self._bundle(refused=answers[qid])
+
+        # 三道题用同一个问题串会串味，这里临时改题干保证一一对应
+        for it in items:
+            it.question = f"问题-{it.qid}"
+        rep = run_eval(items, ask, engine="t", doc_id="d", domain="standard")
+
+        assert rep.metrics["refusal_precision"] == pytest.approx(1.0), (
+            f"精确率应为 2/2=1.0（两题都该拒且都拒了），实际 {rep.metrics['refusal_precision']}"
+        )
+        assert rep.metrics["refusal_recall"] == pytest.approx(1.0)
+
+    def test_answered_when_should_refuse_is_false_negative(self, items):
+        from docqa.eval.runner import run_eval
+
+        answers = {"N1": False, "A1": True, "C1": False}
+
+        def ask(question: str):
+            qid = next(it.qid for it in items if it.question == question)
+            return self._bundle(refused=answers[qid])
+
+        for it in items:
+            it.question = f"问题-{it.qid}"
+        rep = run_eval(items, ask, engine="t", doc_id="d", domain="standard")
+
+        # TP=1（A1），FN=1（N1），精确率 1/1=1.0，召回 1/2=0.5
+        assert rep.metrics["refusal_precision"] == pytest.approx(1.0)
+        assert rep.metrics["refusal_recall"] == pytest.approx(0.5)
+
+
+# ============================================================ 检索层
+class TestRetrievalLayerIsComputed:
+    """检索层指标此前只写在文档里：`metrics.py` 有函数，`runner.py` 从不调用。
+
+    于是 README 首页画着"② 检索层 Recall@k / MRR / nDCG"，报告里却没有这一节。
+    这条断言守的是"这一层真的被算出来了"，而不只是"函数存在"。
+    """
+
+    @pytest.fixture
+    def setup(self):
+        from docqa.chunker import chunk_document
+        from docqa.config import load_domain
+        from docqa.index import HybridIndex
+        from docqa.models import OcrBlock, OcrPage
+        from docqa.qa import QaAgent
+
+        cfg = load_config()
+        profile = load_domain("standard", cfg)
+        blocks = [
+            OcrBlock(block_id="p1-b0", page_no=1, type="clause", order=0,
+                     text="3.1 抗拉强度", clause_label="3.1"),
+            OcrBlock(block_id="p1-b1", page_no=1, type="paragraph", order=1,
+                     text="键的抗拉强度应大于等于 590 MPa。"),
+            OcrBlock(block_id="p1-b2", page_no=2, type="clause", order=2,
+                     text="9.9 包装与标志", clause_label="9.9"),
+            OcrBlock(block_id="p1-b3", page_no=2, type="paragraph", order=3,
+                     text="包装箱外表面应标明制造厂名与产品数量。"),
+        ]
+        pages = [OcrPage(page_no=1, blocks=blocks[:2], tables=[], image_sha256="a",
+                         provider="t", model="t", prompt_version="v1", usage=Usage()),
+                 OcrPage(page_no=2, blocks=blocks[2:], tables=[], image_sha256="b",
+                         provider="t", model="t", prompt_version="v1", usage=Usage())]
+        chunks, _ = chunk_document(pages, "d", profile)
+        agent = QaAgent(HybridIndex(chunks, profile), _CountingProvider(), cfg, profile,
+                        doc_id="d")
+        return agent, chunks
+
+    def test_recall_mrr_ndcg_are_reported(self, setup):
+        from docqa.eval.runner import GoldenItem, run_eval
+
+        agent, chunks = setup
+        target = next(c.chunk_id for c in chunks if "590" in c.text)
+        items = [
+            GoldenItem(qid="R1", question="抗拉强度要求是多少", category="clause",
+                       must_contain=["590"], relevant_chunk_ids=[target]),
+            GoldenItem(qid="R2", question="包装箱应标明什么", category="clause",
+                       relevant_chunk_ids=[
+                           next(c.chunk_id for c in chunks if "制造厂名" in c.text)]),
+        ]
+        rep = run_eval(items, agent.answer, engine="t", doc_id="d", domain="standard")
+
+        for key in ("retrieval_recall_at_k", "retrieval_mrr", "retrieval_ndcg_at_k"):
+            assert key in rep.metrics, f"检索层指标 {key} 没有出现在 metrics 里"
+        assert rep.retrieval["n"] == 2, "只有标注了 relevant_chunk_ids 的题参与统计"
+        assert 0.0 <= rep.metrics["retrieval_recall_at_k"] <= 1.0
+        # 分题型也要分组报
+        assert "clause" in rep.retrieval["per_category"]
+
+    def test_unannotated_items_are_excluded_not_approximated(self, setup):
+        """没标相关片段的题**不计入**，也不能拿页码近似充数。"""
+        from docqa.eval.runner import GoldenItem, run_eval
+
+        agent, chunks = setup
+        items = [
+            GoldenItem(qid="R1", question="抗拉强度要求是多少", category="clause",
+                       must_contain=["590"]),  # 没标 relevant_chunk_ids
+        ]
+        rep = run_eval(items, agent.answer, engine="t", doc_id="d", domain="standard")
+        assert rep.retrieval["n"] == 0
+        assert rep.metrics["retrieval_recall_at_k"] == 0.0
+

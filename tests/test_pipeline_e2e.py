@@ -19,11 +19,11 @@ from PIL import Image
 
 from docqa.config import load_config, load_domain
 from docqa.errors import PageOcrError
+from docqa.llm import NullProvider
 from docqa.models import AnswerBundle, PageImage, RefusalReason
 from docqa.ocr.fixture import FixtureOcrEngine
 from docqa.pipeline import ingest, load_result
 from docqa.qa import QaAgent
-from docqa.llm import NullProvider
 
 
 @pytest.fixture

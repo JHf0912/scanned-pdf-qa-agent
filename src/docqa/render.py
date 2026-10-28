@@ -93,14 +93,21 @@ def _extract_native(doc: pymupdf.Document, page_no: int, out_dir: Path) -> tuple
 
 
 def _rasterize(
-    doc: pymupdf.Document, page_no: int, out_dir: Path, dpi: int, fmt: str
+    doc: pymupdf.Document, page_no: int, out_dir: Path, dpi: int, fmt: str,
+    jpeg_quality: int = 90,
 ) -> tuple[Path, int, int]:
-    """回退路径：按指定 DPI 光栅化整页。"""
+    """回退路径：按指定 DPI 光栅化整页。
+
+    `jpeg_quality` 只在 `fmt == "jpg"` 时有意义。它曾经是配置里的一个死开关：
+    声明在 `RenderConfig` 与 `config/default.yaml` 里，实际却硬编码 `quality=90`，
+    调它不产生任何变化。对扫描件而言这不是小事——JPEG 质量直接决定
+    **喂给 OCR 的输入有多少压缩伪影**，而伪影正是识别错字的来源之一。
+    """
     page = doc[page_no - 1]
     pix = page.get_pixmap(dpi=dpi, alpha=False)
     dest = out_dir / f"p{page_no:04d}_raster.{fmt}"
     if fmt == "jpg":
-        pix.pil_save(str(dest), format="JPEG", quality=90)
+        pix.pil_save(str(dest), format="JPEG", quality=jpeg_quality)
     else:
         pix.save(str(dest))
     return dest, pix.width, pix.height
@@ -167,7 +174,10 @@ def render_pages(
                 # 未指定 dpi 时用一个保守回退值；该页通常不是纯扫描页
                 dpi = float(cfg.dpi or 200)
                 dpi = min(dpi, float(cfg.max_dpi))
-                path, px_w, px_h = _rasterize(doc, page_no, out_dir, int(dpi), cfg.image_format)
+                path, px_w, px_h = _rasterize(
+                    doc, page_no, out_dir, int(dpi), cfg.image_format,
+                    jpeg_quality=cfg.jpeg_quality,
+                )
                 is_native = False
 
             if cfg.upscale and cfg.upscale != 1.0:

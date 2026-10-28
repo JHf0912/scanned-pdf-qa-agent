@@ -19,7 +19,6 @@ from docqa.eval.ocr_eval import (
 )
 from docqa.models import OcrBlock, OcrPage, TableGrid
 
-
 # ---------------------------------------------------------------- 解析基准
 
 

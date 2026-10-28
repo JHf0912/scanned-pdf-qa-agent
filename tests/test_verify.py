@@ -185,3 +185,91 @@ class TestUnitGrounding:
     def test_quantity_tokens_include_units(self):
         assert "12.5 kN" in extract_claims("载荷 12.5 kN。").numbers
         assert "2.0 mm" in extract_claims("壁厚 2.0 mm。").numbers
+
+
+class TestNumericBoundary:
+    """**回归**：数值落地必须按数字边界匹配，不能用裸子串。
+
+    这是一个真实存在过的假阴性，而且恰好落在"数值落地"最该管的地方：
+
+        证据 `圆角半径 r=0.5 mm～1.5 mm`
+        答案 `圆角半径为 5 mm`         → 旧实现判「落地」，因为 "5" 是 "1.5" 的子串
+        答案 `圆角半径为 4`（证据是 40）→ 旧实现判「落地」
+
+    **少写一位小数**是最常见、也最难被人工发现的数值错误（`1.5` → `5` 读起来
+    完全合理），而这道闸门的存在理由正是抓它。所以边界检查不是优化，是正确性。
+    """
+
+    EV = {"c1": "3.4 半圆键的键长 L 两端允许倒圆角，圆角半径 r=0.5 mm～1.5 mm。"}
+
+    def _ng(self, answer: str, evidence: dict[str, str] | None = None):
+        cite = Citation(page_no=1, clause_label="3.4", chunk_id="c1", quote="")
+        r = verify(answer, [cite], retrieved_ids={"c1"}, known_ids={"c1"},
+                   evidence_by_chunk=evidence or self.EV,
+                   known_clause_labels={"3.4", "3.5"})
+        return next(c for c in r.checks if c.name == "numeric_grounding")
+
+    def test_decimal_truncation_is_caught(self):
+        """证据 1.5 → 答案 5：**必须**判失败。"""
+        check = self._ng("圆角半径为 5 mm。[p.1 §3.4]")
+        assert not check.passed, "把 1.5 写成 5 却通过了数值落地——子串匹配漏了"
+
+    def test_decimal_truncation_in_zero_point_five(self):
+        """证据 0.5 → 答案 5：同上。"""
+        assert not self._ng("圆角半径为 5。[p.1 §3.4]").passed
+
+    def test_truncated_integer_is_caught(self):
+        """证据 40 → 答案 4：整数截断同样要抓。"""
+        ev = {"c1": "3.5 键宽 b≥40 mm 时按 5 级。"}
+        assert not self._ng("键宽为 4 mm 时按 5 级。[p.1 §3.4]", evidence=ev).passed
+
+    def test_exact_decimal_still_passes(self):
+        """反向保障：不能因为加了边界检查就把正确的一位数误杀。"""
+        assert self._ng("圆角半径为 1.5 mm。[p.1 §3.4]").passed
+
+    def test_zero_point_five_still_passes(self):
+        assert self._ng("圆角半径为 0.5 mm。[p.1 §3.4]").passed
+
+    def test_unit_adjacent_number_still_matches(self):
+        """`5 级` 里的 `5` 与证据里的 `5 级` 确实是同一个值，不该被边界检查误杀。"""
+        ev = {"c1": "3.5 键宽 b≥40 mm 时按 5 级。"}
+        assert self._ng("按 5 级选取。[p.1 §3.4]", evidence=ev).passed
+
+
+class TestFabricatedClauseCitation:
+    """**回归**：编造的条号出处必须被抓住。
+
+    `parse_citations()` 在条号对不上时会把引用落到该页第一个 chunk 上，
+    **但保留模型原样写出的条号**。于是 `[p.1 §9.9]`（第 1 页根本没有 9.9 条）
+    的 chunk_id 是真实的、引用有效性检查通过——一个凭空捏造的条款出处
+    就这样混了过去（实测四项检查全绿）。
+
+    条号是"可追溯"这条承诺的锚点，编造它必须判失败。
+    """
+
+    EV = {"c1": "1 范围 本文件规定了示例件的技术要求。"}
+    LABELS = {"1", "3.1"}
+
+    def _run(self, label: str):
+        cite = Citation(page_no=1, clause_label=label, chunk_id="c1", quote="")
+        return verify("本文件规定了示例件的技术要求。[p.1 §" + label + "]",
+                      [cite], retrieved_ids={"c1"}, known_ids={"c1"},
+                      evidence_by_chunk=self.EV, known_clause_labels=self.LABELS)
+
+    def test_real_clause_passes(self):
+        chk = next(c for c in self._run("1").checks if c.name == "citation_validity")
+        assert chk.passed
+
+    def test_fabricated_clause_is_caught(self):
+        chk = next(c for c in self._run("9.9").checks if c.name == "citation_validity")
+        assert not chk.passed
+        assert any("9.9" in o for o in chk.offenders)
+
+    def test_without_label_set_the_check_says_so(self):
+        """不给条号集合时不能静默通过——结论里要写明这一半没有校验。"""
+        cite = Citation(page_no=1, clause_label="9.9", chunk_id="c1", quote="")
+        r = verify("技术要求。[p.1 §9.9]", [cite], retrieved_ids={"c1"},
+                   known_ids={"c1"}, evidence_by_chunk=self.EV)
+        chk = next(c for c in r.checks if c.name == "citation_validity")
+        assert chk.passed  # 没有条号集合时只能退化为原行为
+

@@ -39,7 +39,7 @@ from ..models import (
     Usage,
     VerificationReport,
 )
-from .answer import Draft, draft_answer, build_evidence_block
+from .answer import Draft, draft_answer
 from .policy import (
     decide,
     detect_ambiguity,
@@ -98,6 +98,17 @@ class QaAgent:
         result = None
         current_k = self.profile.retrieve.top_k
 
+        # 修复提示是**这一道题**的状态，绝不能是 Agent 实例的状态。
+        #
+        # 它曾经挂在 `self._repair_hint` 上，而只有"修复轮次用尽"那条出口会清空它：
+        # 一道题修复成功并放行之后，这个提示会留在实例上，**下一道题的第一轮起草
+        # 就带着上一题的修复提示**。实测可复现（Q1 数值错→修复通过；Q2 的 prompt
+        # 末尾仍带"你使用了证据中不存在的数值 950 MPa"）。
+        #
+        # 对 CLI 一次性进程影响小，但 `serve` 是长驻进程：一个用户的问题会污染
+        # 之后所有人的问题，而且使用者完全看不见。所以改成局部变量。
+        repair_hint: str | None = None
+
         for attempt in range(1, qa_cfg.max_attempts + 1):
             attempts = attempt
 
@@ -128,7 +139,7 @@ class QaAgent:
             # 让模型对不相关的证据硬答，只会得到一段引不出处的文字，
             # 然后被自检拦下，最终仍然拒答，但已经浪费了一次调用。
             candidates = detect_ambiguity(
-                question, [(c, h.score) for c, h in zip(evidence, result.hits)]
+                question, [(c, h.score) for c, h in zip(evidence, result.hits, strict=True)]
             )
             if candidates:
                 trace.append(
@@ -187,7 +198,6 @@ class QaAgent:
 
             # --- 起草 ---
             t0 = time.perf_counter()
-            repair_hint = getattr(self, "_repair_hint", None)
             draft = draft_answer(
                 question,
                 evidence,
@@ -196,6 +206,9 @@ class QaAgent:
                 temperature=qa_cfg.temperature,
                 max_tokens=qa_cfg.max_tokens,
                 repair_hint=repair_hint,
+                # 引用模板来自场景配置。它此前从未被读取（格式写死在 Citation.render），
+                # 于是"五个场景各配一份引用模板"这件事一直是空转的。
+                citation_template=self.profile.citation_template,
             )
             usage = usage + draft.usage
             trace.append(
@@ -252,23 +265,22 @@ class QaAgent:
                 )
 
             # --- 修复 ---
-            self._repair_hint = self._make_repair_hint(report, draft, evidence)
+            repair_hint = self._make_repair_hint(report, draft, evidence)
             if report and any(c.name == "numeric_grounding" for c in report.failed_gates):
                 # 数值落地失败通常意味着"证据给少了"，扩大召回往往比让模型重写更有效
                 current_k = min(current_k + 3, current_k * 2)
             trace.append(
                 TraceStep(
                     step="repair",
-                    detail=f"第 {attempt} 轮：{self._repair_hint[:120]}",
+                    detail=f"第 {attempt} 轮：{repair_hint[:120]}",
                 )
             )
             _log.info(
                 "自检未通过，进入修复",
-                extra={"detail": f"attempt={attempt} hint={self._repair_hint[:160]}"},
+                extra={"detail": f"attempt={attempt} hint={repair_hint[:160]}"},
             )
 
         # --- 修复轮次用尽 ---
-        self._repair_hint = None
         evidence = [self.index.get(h.chunk_id) for h in hits]
         evidence = [c for c in evidence if c is not None]
         decision = decide(
@@ -370,6 +382,7 @@ class QaAgent:
             trace=trace,
             usage=usage,
             attempts=attempts,
+            citation_template=self.profile.citation_template,
         )
         _log.info(
             "问答完成",

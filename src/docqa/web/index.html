@@ -70,6 +70,19 @@ td.num{font-family:var(--mono);font-variant-numeric:tabular-nums}
 .err{background:#fdf1ef;border:1px solid #f0d5cf;color:var(--bad);
   padding:12px 14px;border-radius:9px;font-size:13.5px}
 .empty{color:var(--muted);font-size:13.5px;padding:14px 0}
+.docs{display:flex;flex-direction:column;gap:6px;margin-top:4px}
+.doc{display:flex;gap:9px;align-items:flex-start;padding:7px 9px;border:1px solid var(--line);
+  border-radius:8px;font-size:12.5px;cursor:pointer;background:#fdfcfa}
+.doc:hover{background:var(--accent-soft)}
+.doc.on{border-color:var(--accent);background:var(--accent-soft)}
+.doc .id{font-family:var(--mono);font-weight:600;color:var(--accent);word-break:break-all}
+.doc .mt{color:var(--muted);font-size:11.5px;font-family:var(--mono)}
+.drop{border:1.5px dashed var(--line);border-radius:9px;padding:16px;text-align:center;
+  color:var(--muted);font-size:13px;cursor:pointer;background:#fdfcfa}
+.drop.hot{border-color:var(--accent);background:var(--accent-soft);color:var(--accent)}
+.btnrow{display:flex;gap:8px;margin-top:9px;flex-wrap:wrap}
+.btnrow button{flex:none;padding:6px 13px;font-size:12.5px;border-radius:8px;
+  background:#eef1f4;color:var(--ink);font-weight:500}
 </style>
 </head>
 <body>
@@ -90,6 +103,16 @@ td.num{font-family:var(--mono);font-variant-numeric:tabular-nums}
   </section>
 
   <aside>
+    <div class="card">
+      <h2>文档</h2>
+      <div id="docs"><div class="empty">加载中…</div></div>
+      <div class="btnrow">
+        <button id="reload" type="button">重新扫描</button>
+        <button id="clear" type="button">只用最新一份</button>
+      </div>
+      <div class="drop" id="drop">拖入或点击上传 PDF（会上传并当场解析）</div>
+      <input type="file" id="file" accept="application/pdf" style="display:none">
+    </div>
     <div class="card">
       <h2>自检结论</h2>
       <div id="checks"><div class="empty">提问后显示各项检查结果。</div></div>
@@ -125,8 +148,10 @@ async function loadStatus(){
   try{
     const r = await fetch('/api/status');
     const d = await r.json();
+    renderDocs(d.docs || [], d.selected || []);
     if(!d.ready){
       $('#docinfo').textContent = '未就绪';
+      // 注意：这里不再把错误写死。用户 ingest 完点"重新扫描"就能恢复。
       $('#out').innerHTML = '<div class="err">' + esc(d.error) + '</div>';
       return;
     }
@@ -141,8 +166,9 @@ async function loadStatus(){
         <tr><td>生成模型</td><td class="num">${d.has_llm ? '已配置' : '未配置（抽取式）'}</td></tr>
       </table>
       <div class="chips">
-        ${d.failed_pages.length ? '<span class="chip warn">识别失败页：' + d.failed_pages.join(',') + '</span>'
-                                : '<span class="chip">全部页面识别成功</span>'}
+        ${(d.failed_pages && d.failed_pages.length)
+          ? '<span class="chip warn">识别失败页：' + d.failed_pages.join(',') + '</span>'
+          : '<span class="chip">全部页面识别成功</span>'}
         ${d.tables ? '<span class="chip">含表格</span>' : ''}
       </div>`;
     const ex = document.querySelector('#ex');
@@ -158,6 +184,100 @@ async function loadStatus(){
     });
   }catch(e){
     $('#out').innerHTML = '<div class="err">无法连接后端：' + esc(e) + '</div>';
+  }
+}
+
+// ---- 文档列表：点击切换，多选即跨文档检索（与 CLI 的 --doc A --doc B 同义） ----
+function renderDocs(docs, selected){
+  const box = $('#docs');
+  if(!docs.length){
+    box.innerHTML = '<div class="empty">还没有产物。先跑 docqa ingest，或直接上传。</div>';
+    return;
+  }
+  box.innerHTML = docs.map(d => {
+    const on = (selected || []).includes(d.doc_id);
+    const bits = [d.engine, d.kind, d.pages + '页', d.chunks + '片段'].filter(Boolean).join(' · ');
+    return `<div class="doc ${on ? 'on' : ''}" data-id="${esc(d.doc_id)}">
+      <span class="id">${esc(d.doc_id)}</span>
+      <span class="mt">${esc(bits)}</span>
+    </div>`;
+  }).join('');
+  box.querySelectorAll('.doc').forEach(el => {
+    el.onclick = () => toggleDoc(el.dataset.id);
+  });
+}
+
+let _selected = [];
+async function toggleDoc(id){
+  const i = _selected.indexOf(id);
+  if(i >= 0) _selected.splice(i, 1); else _selected.push(id);
+  await selectDocs(_selected);
+}
+async function selectDocs(ids){
+  try{
+    const r = await fetch('/api/select', {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({doc_ids: ids})
+    });
+    const d = await r.json();
+    if(!r.ok || !d.ready){
+      $('#out').innerHTML = '<div class="err">切换失败：' + esc(d.error || ('HTTP ' + r.status)) + '</div>';
+      return;
+    }
+    _selected = ids;
+    $('#checks').innerHTML = '<div class="empty">提问后显示各项检查结果。</div>';
+    $('#cites').innerHTML = '<div class="empty">—</div>';
+    $('#trace').innerHTML = '<div class="empty">—</div>';
+    $('#out').innerHTML = '';
+    await loadStatus();
+  }catch(e){
+    $('#out').innerHTML = '<div class="err">切换失败：' + esc(e.message) + '</div>';
+  }
+}
+
+$('#reload').onclick = loadStatus;
+$('#clear').onclick = () => selectDocs([]);
+
+// ---- 上传 ----
+const drop = $('#drop'), fileInput = $('#file');
+drop.onclick = () => fileInput.click();
+drop.ondragover = e => { e.preventDefault(); drop.classList.add('hot'); };
+drop.ondragleave = () => drop.classList.remove('hot');
+drop.ondrop = e => {
+  e.preventDefault(); drop.classList.remove('hot');
+  if(e.dataTransfer.files.length) uploadFile(e.dataTransfer.files[0]);
+};
+fileInput.onchange = () => {
+  if(fileInput.files.length) uploadFile(fileInput.files[0]);
+  fileInput.value = '';
+};
+
+async function uploadFile(file){
+  if(!file.name.toLowerCase().endsWith('.pdf')){
+    $('#out').innerHTML = '<div class="err">只接受 PDF 文件。</div>'; return;
+  }
+  drop.textContent = '上传并解析中……（大文件请耐心等待，识别是逐页进行的）';
+  drop.style.pointerEvents = 'none';
+  try{
+    const r = await fetch('/api/upload', {
+      method:'POST',
+      headers:{'Content-Type':'application/pdf', 'X-Filename': file.name},
+      body: file
+    });
+    const d = await r.json();
+    if(!r.ok) throw new Error(d.detail || ('HTTP ' + r.status));
+    _selected = [];
+    await loadStatus();
+    $('#out').innerHTML = `<div class="card"><div class="verdict">
+      <span class="dot ok"></span>已解析 <code>${esc(d.doc_id)}</code>
+      </div><div class="note">${d.chunks} 个片段${
+        d.failed_pages && d.failed_pages.length
+          ? '，识别失败页 ' + esc(d.failed_pages.join(',')) : ''}</div></div>`;
+  }catch(e){
+    $('#out').innerHTML = '<div class="err">上传失败：' + esc(e.message) + '</div>';
+  }finally{
+    drop.textContent = '拖入或点击上传 PDF（会上传并当场解析）';
+    drop.style.pointerEvents = '';
   }
 }
 

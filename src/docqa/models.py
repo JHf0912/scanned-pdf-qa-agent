@@ -368,6 +368,15 @@ class RetrievalHit:
 
 # ---------------------------------------------------------------- 问答
 
+# 引用渲染的默认模板。`citation_template` 在 domain profile 里可覆盖，
+# 由 `Citation.render(template=...)` 使用——模板是**场景配置**的一部分，
+# 不是写死的字符串（公文用「第X条」、标准用「§3.6」、合同可能要「附件二」）。
+DEFAULT_CITATION_TEMPLATE = "[p.{page} §{clause}]"
+# 没有条号时的退化模板（短公文整篇无结构时用段落号）。
+FALLBACK_CITATION_TEMPLATE = "[p.{page} ¶{para}]"
+BARE_CITATION_TEMPLATE = "[p.{page}]"
+
+
 @dataclass(frozen=True)
 class Citation:
     """引用。渲染要**容错**：有条号时给条号，没有时退化到段落号。
@@ -381,13 +390,35 @@ class Citation:
     chunk_id: str
     quote: str
     para_no: int | None = None
+    # 来源文档。多文档检索时，两份文件的"第 3 页"是两回事，
+    # 引用里必须能区分它们——否则读者无法回到正确的那一份。
+    doc_id: str | None = None
 
-    def render(self) -> str:
+    def render(self, template: str | None = None) -> str:
+        """渲染成人类可读的引用。
+
+        Args:
+            template: 形如 `"[p.{page} §{clause}]"` 的模板，通常来自
+                `domain.citation_template`。为 None 时用默认模板。
+                **模板里出现 `{doc}` 且本引用带 doc_id 时**会插入来源文档名，
+                这是多文档场景下区分引用的唯一方式。
+        """
+        tpl = template or DEFAULT_CITATION_TEMPLATE
+        doc = self.doc_id or ""
+        # 模板里带了 {doc} 却没给 doc_id：不能留一个空槽，退回默认形式。
+        if "{doc}" in tpl and not doc:
+            tpl = tpl.replace("{doc}", "").replace("  ", " ").replace(" §", "§").strip()
+
         if self.clause_label:
-            return f"[p.{self.page_no} §{self.clause_label}]"
+            out = tpl.format(page=self.page_no, clause=self.clause_label,
+                             doc=doc, para=self.para_no or "")
+            return out
         if self.para_no:
-            return f"[p.{self.page_no} ¶{self.para_no}]"
-        return f"[p.{self.page_no}]"
+            return FALLBACK_CITATION_TEMPLATE.format(
+                page=self.page_no, para=self.para_no, doc=doc, clause=""
+            )
+        return BARE_CITATION_TEMPLATE.format(page=self.page_no, doc=doc, clause="",
+                                             para="")
 
 
 @dataclass(frozen=True)
@@ -466,6 +497,9 @@ class AnswerBundle:
     trace: list[TraceStep] = field(default_factory=list)
     usage: Usage = field(default_factory=Usage)
     attempts: int = 1
+    # 渲染引用用的模板（来自领域配置）。对外序列化时一并给出"渲染后"的字符串，
+    # 前端与报告直接显示它，不需要自己再去拼一遍格式。
+    citation_template: str | None = None
 
     def to_dict(self) -> dict:
         return {
@@ -480,13 +514,15 @@ class AnswerBundle:
                     "page_no": c.page_no,
                     "clause_label": c.clause_label,
                     "chunk_id": c.chunk_id,
+                    "doc_id": c.doc_id,
                     "quote": c.quote,
-                    "rendered": c.render(),
+                    "rendered": c.render(self.citation_template),
                 }
                 for c in self.citations
             ],
             "candidates": [
-                {"interpretation": c.interpretation, "value": c.value, "citation": c.citation.render()}
+                {"interpretation": c.interpretation, "value": c.value,
+                 "citation": c.citation.render(self.citation_template)}
                 for c in self.candidates
             ],
             "verification": self.verification.to_dict(),

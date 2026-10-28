@@ -148,27 +148,85 @@ def _number_in_evidence(token: str, evidence: str) -> bool:
 
     比对前把两边都归一化，并额外尝试中文数字写法，
     避免"一年"与"1 年"这种差异被误判为幻觉。
+
+    **必须按数字边界匹配，不能用裸子串。**
+    -------------------------------------
+    早先的实现是 `t in e`，于是：
+        证据 `圆角半径 r=0.5 mm～1.5 mm`，答案写 `5 mm` → 判"落地"（因为 "5" 是 "1.5" 的子串）。
+    这正是"数值落地"这套机制存在的意义所在——它专门用来抓"答案里的数字在证据里不存在"，
+    而子串匹配会让**最像真话的那类数值幻觉**（少写一位小数）整片漏过。
+    实测对抗变异里 `number` 类的漏检就落在这里。
     """
     t = normalize(token)
     e = normalize(evidence)
-    if t in e:
+    if not t:
+        return False
+
+    # 1) 原文命中，且命中位置的左右都不是数字/小数点/冒号——边界干净才算数。
+    if _contains_with_boundary(t, e):
         return True
-    # 数值与单位之间的空格常被模型写丢（`590MPa` vs `590 MPa`），
-    # 这类差异不该判为幻觉，所以再去掉空格比一次。
-    if t.replace(" ", "") in e.replace(" ", ""):
+    # 2) 数值与单位之间的空格常被模型写丢（`590MPa` vs `590 MPa`），
+    #    这类差异不该判为幻觉，所以去掉空格后再按同样规则比一次。
+    if _contains_with_boundary(t.replace(" ", ""), e.replace(" ", "")):
         return True
-    # 中文数字写法（"一年" vs "1 年"）
-    return cn_to_arabic(t) in cn_to_arabic(e)
+    # 3) 中文数字写法（"一年" vs "1 年"）
+    ct, ce = cn_to_arabic(t), cn_to_arabic(e)
+    return ct != t and _contains_with_boundary(ct, ce)
+
+
+# 数字字符：ASCII 数字 + 小数点/冒号/斜杠（`1:100`、`1.5` 属于同一个"量"的一部分）。
+_DIGIT_CHARS = frozenset("0123456789.:／/％‰")
+
+
+def _is_digit_char(ch: str) -> bool:
+    return ch in _DIGIT_CHARS or ch.isdigit()
+
+
+def _contains_with_boundary(needle: str, haystack: str) -> bool:
+    """在 haystack 里找 needle，但要求两侧不紧邻数字字符。
+
+    这样 `5` 不会命中 `1.5`、`4` 不会命中 `40`、`10` 不会命中 `1.0`。
+    两侧若紧邻的是单位或中文（`590` 对 `590MPa`），仍算命中——那是同一个量。
+    """
+    if not needle:
+        return False
+    start = 0
+    n = len(needle)
+    while True:
+        idx = haystack.find(needle, start)
+        if idx < 0:
+            return False
+        before = haystack[idx - 1] if idx > 0 else ""
+        after = haystack[idx + n] if idx + n < len(haystack) else ""
+        # 只有 needle 的首/尾是数字时才需要检查对应边界。
+        left_ok = not (_is_digit_char(needle[0]) and before and _is_digit_char(before))
+        right_ok = not (_is_digit_char(needle[-1]) and after and _is_digit_char(after))
+        if left_ok and right_ok:
+            return True
+        start = idx + 1
 
 
 # ---------------------------------------------------------------- 各项检查
 
 def check_citation_validity(
-    citations: list[Citation], retrieved_ids: set[str], known_ids: set[str]
+    citations: list[Citation],
+    retrieved_ids: set[str],
+    known_ids: set[str],
+    known_clause_labels: set[str] | None = None,
 ) -> CheckResult:
     """每条引用都必须指向真实存在、且本次确实召回过的 chunk。
 
     这条挡的是"编造出处"：模型给出一个格式漂亮但根本不存在的引用。
+
+    **条号本身也要校验。**
+    ----------------------
+    只校验 chunk_id 存在是不够的：`parse_citations()` 在条号对不上时会把引用
+    落到该页第一个 chunk 上，**但保留原样写出的条号**。于是答案里出现
+    `[p.1 §9.9]`（第 1 页根本没有 9.9 条）时，chunk_id 是真实的、检查通过——
+    一个凭空捏造的条款出处就混了过去。实测这条能全绿通过所有四项检查。
+
+    给了 `known_clause_labels` 时，额外要求：引用里的条号必须是文档中真实存在的条号。
+    （不给就跳过这一半校验，并在结论里明说，避免"静默失效的闸门"。）
     """
     offenders: list[str] = []
     if not citations:
@@ -180,19 +238,38 @@ def check_citation_validity(
             offenders.append(f"引用了不存在的片段 {c.chunk_id}")
         elif c.chunk_id not in retrieved_ids:
             offenders.append(f"引用了本次未召回的片段 {c.chunk_id}")
+
+    # --- 条号真实性 ---
+    labels = known_clause_labels or set()
+    checked_labels = 0
+    unmatched_labels: list[str] = []
+    if labels:
+        for c in citations:
+            raw = normalize(c.clause_label or "")
+            if not raw:
+                continue
+            checked_labels += 1
+            if raw not in labels:
+                unmatched_labels.append(raw)
+        for raw in sorted(set(unmatched_labels)):
+            offenders.append(f"引用标注了文档中不存在的条款 {raw}")
+
+    if not offenders:
+        detail = f"检查 {len(citations)} 条引用，全部指向真实且已召回的片段"
+        if checked_labels:
+            detail += f"，且 {checked_labels} 处条号均为文档中真实存在的条号"
+    elif not citations:
+        detail = "答案未提供任何引用"
+    elif unmatched_labels:
+        detail = f"引用的条号与文档不符：{'、'.join(sorted(set(unmatched_labels)))}"
+    else:
+        detail = f"{len(offenders)}/{len(citations)} 条引用无效"
+
     return CheckResult(
         name="citation_validity",
         passed=not offenders,
         severity=CheckSeverity.GATE,
-        detail=(
-            f"检查 {len(citations)} 条引用，全部指向真实且已召回的片段"
-            if not offenders
-            else (
-                "答案未提供任何引用"
-                if not citations
-                else f"{len(offenders)}/{len(citations)} 条引用无效"
-            )
-        ),
+        detail=detail,
         offenders=offenders,
     )
 
@@ -386,22 +463,40 @@ def check_sentence_support(
     )
 
 
-def check_extraction_health(evidence_chunks) -> CheckResult:
-    """证据是否来自识别失败的页。
+def check_extraction_health(evidence_chunks, failed_pages=None) -> CheckResult:
+    """证据是否涉及识别失败的页面。
 
     这条对应 OCR 污染那一侧：只要证据涉及任何一页识别失败，
     这次回答就不该放行——不是"答案错了"，而是"我们根本不知道这页写了什么"。
+
+    注意：主链路上这道判定在 `qa.policy.decide()` 里（那里能拿到
+    `(doc_id, page_no)` 形态的失败页集合，且发生在放行之前）。
+    本函数提供给**不走 decide 的调用方**（例如自定义评估流程）复用同一判据。
+
+    （此前的实现是一个永远不 append 的循环：`failed` 恒为空、恒返回 passed=True，
+    是个**永远不会失败的检查**。这类空壳比没有检查更糟——它会被当成一路保障。）
     """
-    failed: list[str] = []
+    failed_for = failed_pages or set()
+    bad: list[str] = []
     for c in evidence_chunks:
-        for block_id in getattr(c, "block_ids", ()) or ():
-            pass
+        doc_id = getattr(c, "doc_id", "") or ""
+        page = getattr(c, "page_no", None)
+        if page is None:
+            continue
+        # 失败页集合支持两种形态：裸页码（单文档）与 (doc_id, page_no)（多文档）。
+        if page in failed_for or (doc_id, page) in failed_for:
+            bad.append(f"{doc_id or '?'} 第 {page} 页")
+
     return CheckResult(
         name="extraction_health",
-        passed=not failed,
+        passed=not bad,
         severity=CheckSeverity.GATE,
-        detail="证据所涉页面均已成功识别",
-        offenders=failed,
+        detail=(
+            "证据所涉页面均已成功识别"
+            if not bad
+            else f"证据涉及 {len(bad)} 处识别失败的页面"
+        ),
+        offenders=bad,
     )
 
 
@@ -424,7 +519,7 @@ def verify(
             "条号"与"数据值"（两者都是 `3.6` 这种形态）。
     """
     checks = [
-        check_citation_validity(citations, retrieved_ids, known_ids),
+        check_citation_validity(citations, retrieved_ids, known_ids, known_clause_labels),
         check_numeric_grounding(answer, citations, evidence_by_chunk),
         check_clause_consistency(answer, citations, known_clause_labels),
     ]

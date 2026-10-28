@@ -21,7 +21,8 @@ import re
 from dataclasses import dataclass
 
 from ..config import ProviderConfig
-from ..llm import LLMProvider, NullProvider, assemble_extractive, Evidence as ExtractiveEvidence
+from ..llm import Evidence as ExtractiveEvidence
+from ..llm import LLMProvider, NullProvider, assemble_extractive
 from ..logging import get_logger
 from ..models import Chunk, Citation, Usage
 
@@ -118,6 +119,7 @@ def parse_citations(answer: str, chunks: list[Chunk]) -> list[Citation]:
             chunk_id=target.chunk_id,
             quote=target.text[:200],
             para_no=int(para) if para else target.ordinal,
+            doc_id=target.doc_id,
         )
     return list(found.values())
 
@@ -131,12 +133,16 @@ def draft_answer(
     temperature: float = 0.0,
     max_tokens: int = 1200,
     repair_hint: str | None = None,
+    citation_template: str | None = None,
 ) -> Draft:
     """生成一版答案草稿。
 
     Args:
         repair_hint: 由自检失败触发的修复提示（例如"你给出的数值 1.5 在证据中不存在"）。
             这是把自检变成控制流的关键接线点。
+        citation_template: 场景配置里的引用模板（`domain.citation_template`）。
+            此前这个配置项**从未被任何代码读取**——格式写死在 `Citation.render()` 里。
+            现在它真的生效：公文用「第X条」、标准用「§3.6」，改 YAML 即可。
     """
     evidence_block, _ = build_evidence_block(chunks)
 
@@ -151,7 +157,9 @@ def draft_answer(
     if provider.name == "null" or isinstance(provider, NullProvider):
         text = assemble_extractive(
             question,
-            [ExtractiveEvidence(text=c.text, citation=_cite_str(c)) for c in chunks],
+            [ExtractiveEvidence(text=c.text,
+                                citation=_cite_str(c, citation_template))
+             for c in chunks],
         )
         return Draft(
             text=text,
@@ -162,6 +170,7 @@ def draft_answer(
                     chunk_id=c.chunk_id,
                     quote=c.text[:200],
                     para_no=c.ordinal,
+                    doc_id=c.doc_id,
                 )
                 for c in chunks
             ],
@@ -186,7 +195,17 @@ def draft_answer(
     )
 
 
-def _cite_str(chunk: Chunk) -> str:
-    if chunk.clause_label:
-        return f"[p.{chunk.page_no} §{chunk.clause_label}]"
-    return f"[p.{chunk.page_no} ¶{chunk.ordinal}]"
+def _cite_str(chunk: Chunk, template: str | None = None) -> str:
+    """把 chunk 渲染成引用串。`template` 来自 domain profile（可为 None）。
+
+    注意这里走的是与 `Citation.render()` **同一条**渲染路径：
+    引用格式只有一个来源，不能"提取式用一套、生成式用另一套"。
+    """
+    return Citation(
+        page_no=chunk.page_no,
+        clause_label=chunk.clause_label,
+        chunk_id=chunk.chunk_id,
+        quote="",
+        para_no=chunk.ordinal,
+        doc_id=chunk.doc_id,
+    ).render(template)

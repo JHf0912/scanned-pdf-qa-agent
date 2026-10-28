@@ -345,7 +345,7 @@ def chunk_document(
                 window=cfg.sentence_window_chars,
                 overlap_sentences=cfg.sentence_overlap,
             )
-            for w_idx, window in enumerate(windows, start=1):
+            for window in windows:
                 ordinal += 1
                 chunks.append(
                     Chunk(
