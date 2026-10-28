@@ -15,9 +15,15 @@ import json
 import httpx
 import pytest
 
-from docqa.config import ProviderConfig
+from docqa.config import Config, ProviderConfig
 from docqa.errors import AuthError, ConfigError, ProviderError
-from docqa.llm import build_provider
+from docqa.llm import (
+    NullProvider,
+    build_llm_provider,
+    build_ocr2_provider,
+    build_ocr_provider,
+    build_provider,
+)
 from docqa.llm.base import ImagePart, LLMResponse, classify_status, with_retry
 from docqa.llm.openai_compat import OpenAICompatProvider
 
@@ -240,6 +246,49 @@ class TestBuildProvider:
     def test_anthropic_provider_constructed(self):
         p = build_provider(ProviderConfig(provider="anthropic", api_key="k", model="claude-opus-5"))
         assert "anthropic" in p.name
+
+    def test_non_ascii_key_is_rejected_with_actionable_message(self):
+        """占位符没替换时，报错必须点出"密钥含非 ASCII"，而不是等 httpx 炸栈。"""
+        with pytest.raises(ConfigError, match="非 ASCII"):
+            build_provider(ProviderConfig(provider="openai", api_key="密钥", model="m"))
+
+
+class TestHighLevelFactories:
+    """三组端点的工厂：缺配置时各自的表现**不一样**，不能混为一谈。
+
+    - OCR 缺失 → 报错（扫描件没有文本层，绕不过去）；
+    - 第二引擎缺失 → 返回 None（允许不做跨引擎校验，报告里标注）；
+    - 生成模型缺失 → 回退 `NullProvider`（抽取式降级，其余功能照常）。
+
+    这几条以前只在**配了真实端点**的机器上被顺带跑到（CLI 端到端用例
+    真的建了 provider）。默认测试不读 `.env` 之后，必须用假配置把它们
+    钉住——否则覆盖率会掉，而那正是"这些分支从没被独立测过"的证据。
+    """
+
+    def test_ocr_without_config_errors(self):
+        with pytest.raises(ConfigError, match="缺少 OCR"):
+            build_ocr_provider(Config())
+
+    def test_ocr_with_config_builds_provider(self):
+        cfg = Config()
+        cfg.ocr = ProviderConfig(provider="openai", api_key="k", model="m")
+        assert build_ocr_provider(cfg).name.startswith("openai")
+
+    def test_ocr2_absent_is_none_not_an_error(self):
+        assert build_ocr2_provider(Config()) is None
+
+    def test_ocr2_configured_builds_provider(self):
+        cfg = Config()
+        cfg.ocr2 = ProviderConfig(provider="openai", api_key="k", model="m")
+        assert build_ocr2_provider(cfg).name.startswith("openai")
+
+    def test_llm_absent_falls_back_to_extractive(self):
+        assert isinstance(build_llm_provider(Config()), NullProvider)
+
+    def test_llm_configured_builds_provider(self):
+        cfg = Config()
+        cfg.llm = ProviderConfig(provider="openai", api_key="k", model="m")
+        assert build_llm_provider(cfg).name.startswith("openai")
 
 
 class TestImagePart:

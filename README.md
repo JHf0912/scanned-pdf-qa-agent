@@ -7,7 +7,7 @@
 从一张没有文本层的扫描页，到一个带页码与条款号、能自检、也会明确拒答的答案。
 
 [![CI](https://github.com/JHf0912/scanned-pdf-qa-agent/actions/workflows/test.yml/badge.svg)](https://github.com/JHf0912/scanned-pdf-qa-agent/actions/workflows/test.yml)
-[![coverage](https://img.shields.io/badge/coverage-87.9%25-brightgreen)](#测试)
+[![coverage](https://img.shields.io/badge/coverage-87.7%25-brightgreen)](#测试)
 [![python](https://img.shields.io/badge/python-3.12-3776AB?logo=python&logoColor=white)](pyproject.toml)
 [![license](https://img.shields.io/badge/license-MIT-green)](LICENSE)
 [![PyMuPDF](https://img.shields.io/badge/dependency-PyMuPDF%20AGPL--3.0-orange)](docs/deployment.md)
@@ -32,7 +32,7 @@
 | **检索** | BM25 词元 + 字符二元组，RRF 融合，不依赖任何模型 |
 | **自检** | 引用有效性 / 数值落地 / 条号真实性，作为 **gate** |
 | **评估** | 三层指标（索引 → 检索 → 生成）+ 对抗变异 + 噪声扫描 |
-| **规模** | 353 个用例，覆盖率 87.9%；CI 含回归基线门禁 |
+| **规模** | 364 个用例，覆盖率 87.7%；CI 含回归基线门禁 |
 | **许可** | 自身 MIT；依赖 PyMuPDF 为 AGPL-3.0 |
 
 ## 目录
@@ -338,14 +338,18 @@ RRF 的分数是 `Σ w/(k+rank)`，k=60 时排名第 1 与第 20 只差约 27%�
 uv run pytest -q --cov=src/docqa --cov-report=term-missing
 ```
 
-**当前覆盖率 87.9%**（3991 条语句中 484 条未覆盖，353 个用例）。
-默认用例全部 mock 外部依赖、**不读真实文档**；CI 环境没有 `.env`，因此也不碰网络。
-在**本地配了 `.env`** 的机器上，少数 `ask` 端到端用例会走真实端点——
-它们验证的是 CLI 参数能否一路传到位，不是模型质量。
+**当前覆盖率 87.7%**（3995 条语句中 490 条未覆盖，364 个用例）。
+默认用例全部 mock 外部依赖、**不读真实文档，也不读 `.env`**：
+`tests/conftest.py` 在收集用例之前清掉全部 `DOCQA_*` 环境变量，并置
+`DOCQA_DISABLE_DOTENV=1`，让 `load_config()` 不再自动读项目根的 `.env`。
+所以**本机配没配模型、配的是哪个模型，默认测试走的都是同一条路径**——
+这不是洁癖：不隔离的话，几个没传 `--no-llm` 的端到端用例会真的打端点，
+既花钱，又让答案带上模型采样波动，同一条断言可能今天过明天不过。
+需要真实端点的用例一律标 `live`，只有显式加 `--live` 才会执行。
 
 | 通道 | 命令 | 说明 |
 |:---|:---|:---|
-| 默认 | `uv run pytest -q` | mock 外部依赖；CI 上不碰网络 |
+| 默认 | `uv run pytest -q` | mock 外部依赖、不读 `.env`；**任何机器上都不碰网络** |
 | 真实端点 | `uv run pytest -m live --live -q` | 真的打一次端点，会产生少量费用 |
 | CI | `ruff check` → `pytest` → 基线重跑 | 覆盖率低于 84% 或指标下滑即失败 |
 
@@ -410,8 +414,8 @@ uv run docqa eval --doc out/demo/<产物> --golden data/golden/demo_qa.jsonl `
   **提示注入扫描**、延迟 p50/p95、回归基线 + CI 门禁、
   **真实端点冒烟通道**（`pytest -m live --live`）；
 - **交付**：CLI + Web UI + 静态报告、双 provider + 无模型回退、
-  五个业务场景 profile、**容器镜像与部署文档**、87.9% 覆盖率
-  （`pytest --cov=src/docqa`，3991 行中 484 行未覆盖）、完整文档。
+  五个业务场景 profile、**容器镜像与部署文档**、87.7% 覆盖率
+  （`pytest --cov=src/docqa`，3995 行中 490 行未覆盖）、完整文档。
 
 合成件上跑通全链路：类型判定 → 识别 → 切分 → 检索 → 问答 → 自检 → 拒答 → 评估 → 报告。
 

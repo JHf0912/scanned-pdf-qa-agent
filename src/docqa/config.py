@@ -31,6 +31,23 @@ PROJECT_ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_CONFIG_PATH = PROJECT_ROOT / "config" / "default.yaml"
 DOMAINS_DIR = PROJECT_ROOT / "config" / "domains"
 
+# 显式关闭"自动读取项目根 .env"的开关。
+#
+# 为什么需要它
+# ------------
+# 默认测试通道（以及 CI）必须**离线且确定**：同一份代码在家里配了 `.env` 的
+# 机器上和在干净容器里跑，结果必须一样。而 `load_config()` 会自动读 `.env`，
+# 于是"本机是否恰好配了模型"会悄悄改变测试走哪条路径——
+# 配了模型的机器上，几个 CLI 端到端用例会真的打端点、花钱，
+# 而且答案由模型采样产生，同一条断言可能今天过明天不过。
+#
+# 只清环境变量是不够的：`load_dotenv()` 会把 `.env` 重新写回 `os.environ`。
+# 所以测试在读取配置**之前**就把这个开关置为 1，并清掉已有的 `DOCQA_*`。
+#
+# 显式传 `env_file=` 的调用方仍然会读那个文件——它明确说了要读哪个文件，
+# 与"自动去项目根捡 `.env`"不是一回事。这条留作测试与工具脚本的逃生口。
+DOTENV_DISABLE_ENV = "DOCQA_DISABLE_DOTENV"
+
 
 # ---------------------------------------------------------------- 子配置
 
@@ -284,11 +301,18 @@ def load_config(
 
     Args:
         path: YAML 路径，默认 `config/default.yaml`。
-        env_file: `.env` 路径，默认项目根下的 `.env`。
+        env_file: `.env` 路径，默认项目根下的 `.env`。**显式传入时即使
+            `DOCQA_DISABLE_DOTENV=1` 也会读**——调用方明确指定了文件。
         require_ocr: 为 True 时，缺少 OCR 端点直接报错。解析类命令应传 True，
             这样用户在第一步就能拿到可操作的提示，而不是跑到一半才失败。
     """
-    load_dotenv(env_file or PROJECT_ROOT / ".env", override=False)
+    if env_file is not None:
+        load_dotenv(env_file, override=False)
+    elif not _env_bool(DOTENV_DISABLE_ENV, False):
+        load_dotenv(PROJECT_ROOT / ".env", override=False)
+    # `DOCQA_DISABLE_DOTENV=1` 时**不自动读项目根的 .env**。
+    # 测试与 CI 用它把自己与开发机的密钥环境隔开（见 conftest.py）；
+    # 显式 `env_file=` 仍然生效，见上面的 Args。
 
     cfg = Config()
     data = _load_yaml(path or DEFAULT_CONFIG_PATH)
