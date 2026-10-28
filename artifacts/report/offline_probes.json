@@ -1,0 +1,233 @@
+{
+  "seed": 0,
+  "probes": {
+    "sentence_support": {
+      "name": "sentence_support",
+      "question": "句级支撑度若升格为 gate，精确率与召回率是多少？",
+      "method": "在合成件片段上程序化构造带标签样本，直接调用 qa.verify.check_sentence_support；flagged = 分数 < 0.5（即当前实现判为『支撑不足』）。正例含证据原句、调序拼接与同义改述；负例含无关整句、真假混合与跨片段串内容。",
+      "threshold": 0.5,
+      "n": 24,
+      "confusion": {
+        "tp": 10,
+        "fp": 0,
+        "fn": 5,
+        "tn": 9,
+        "precision": 1.0,
+        "recall": 0.6667,
+        "f1": 0.8,
+        "specificity": 1.0,
+        "precision_ci": [
+          0.7224598312333834,
+          1.0
+        ],
+        "recall_ci": [
+          0.41713125151212976,
+          0.8482389930530876
+        ]
+      },
+      "by_kind": {
+        "extractive": {
+          "n": 5,
+          "expected": "supported",
+          "flagged": 0,
+          "missed": 0,
+          "false_alarm": 0,
+          "mean_score": 1.0,
+          "examples": []
+        },
+        "fabricated": {
+          "n": 5,
+          "expected": "unsupported",
+          "flagged": 5,
+          "missed": 0,
+          "false_alarm": 0,
+          "mean_score": 0.0,
+          "examples": [
+            "包装箱内应附有中文说明书与合格证，并注明生产批号。",
+            "包装箱内应附有中文说明书与合格证，并注明生产批号。"
+          ]
+        },
+        "mixed": {
+          "n": 5,
+          "expected": "unsupported",
+          "flagged": 0,
+          "missed": 5,
+          "false_alarm": 0,
+          "mean_score": 0.5,
+          "examples": [
+            "本文件规定了示例件的术语、技术要求与验收规则。包装箱内应附有中文说明书与合格证，并注明生产批号。",
+            "Q/EXAMPLE 100—2025  示例件通用要求。包装箱内应附有中文说明书与合格证，并注明生产"
+          ]
+        },
+        "other_chunk": {
+          "n": 5,
+          "expected": "unsupported",
+          "flagged": 5,
+          "missed": 0,
+          "false_alarm": 0,
+          "mean_score": 0.0,
+          "examples": [
+            "3.3  示例件的工作温度范围为 -20 ℃ ~ 60 ℃",
+            "3.5  当公称直径 d 大于 8 mm 时，壁厚 t 应按 Q/EXAMPLE 100—2025 "
+          ]
+        },
+        "paraphrase": {
+          "n": 1,
+          "expected": "supported",
+          "flagged": 0,
+          "missed": 0,
+          "false_alarm": 0,
+          "mean_score": 1.0,
+          "examples": []
+        },
+        "reordered": {
+          "n": 3,
+          "expected": "supported",
+          "flagged": 0,
+          "missed": 0,
+          "false_alarm": 0,
+          "mean_score": 1.0,
+          "examples": []
+        }
+      },
+      "threshold_sweep": [
+        {
+          "threshold": 0.3,
+          "precision": 1.0,
+          "recall": 0.6667,
+          "flagged": 10
+        },
+        {
+          "threshold": 0.4,
+          "precision": 1.0,
+          "recall": 0.6667,
+          "flagged": 10
+        },
+        {
+          "threshold": 0.5,
+          "precision": 1.0,
+          "recall": 0.6667,
+          "flagged": 10
+        },
+        {
+          "threshold": 0.6,
+          "precision": 1.0,
+          "recall": 1.0,
+          "flagged": 15
+        },
+        {
+          "threshold": 0.7,
+          "precision": 1.0,
+          "recall": 1.0,
+          "flagged": 15
+        },
+        {
+          "threshold": 0.8,
+          "precision": 1.0,
+          "recall": 1.0,
+          "flagged": 15
+        }
+      ],
+      "gate_recommendation": "**不建议升格为 gate**（召回率 66.7% < 90%）。维持咨询性指标：上报但不拦截。一个未达标的门禁会把用户训练成忽略告警。",
+      "limitations": [
+        "正例来自证据原句（词面重叠最高），所以精确率是**上限**；真实答案会改述，假阳性只会更多。",
+        "改述只有一张手工替换表，覆盖面远小于真实生成模型的表达方式。",
+        "样本量小且全部来自 2 页合成件，结论不能外推到真实文档；真实文档上应重跑同一探针。"
+      ]
+    },
+    "cross_engine_spotcheck": {
+      "name": "cross_engine_spotcheck",
+      "question": "跨引擎一致性校验标出的可疑字段里，有多少是真的错？",
+      "method": "同一页文本作引擎 A；引擎 B 分两类：把每个不同高风险字段取值的**所有出现**一起改掉（已知错误），以及只改空行/标点/追加无字段文本/替换非字段词（对照）。报警判据即 diff_claims 的集合差非空。",
+      "n": 43,
+      "confusion": {
+        "tp": 35,
+        "fp": 0,
+        "fn": 0,
+        "tn": 8,
+        "precision": 1.0,
+        "recall": 1.0,
+        "f1": 1.0,
+        "specificity": 1.0,
+        "precision_ci": [
+          0.9010957324106112,
+          1.0
+        ],
+        "recall_ci": [
+          0.9010957324106112,
+          1.0
+        ]
+      },
+      "by_kind": {
+        "clean_blank_lines": {
+          "n": 2,
+          "truth": "clean",
+          "flagged": 0,
+          "detected": 0,
+          "missed": 0,
+          "false_alarm": 0
+        },
+        "clean_confusable_char": {
+          "n": 2,
+          "truth": "clean",
+          "flagged": 0,
+          "detected": 0,
+          "missed": 0,
+          "false_alarm": 0
+        },
+        "clean_extra_text": {
+          "n": 2,
+          "truth": "clean",
+          "flagged": 0,
+          "detected": 0,
+          "missed": 0,
+          "false_alarm": 0
+        },
+        "clean_punctuation": {
+          "n": 2,
+          "truth": "clean",
+          "flagged": 0,
+          "detected": 0,
+          "missed": 0,
+          "false_alarm": 0
+        },
+        "number": {
+          "n": 35,
+          "truth": "injected",
+          "flagged": 35,
+          "detected": 35,
+          "missed": 0,
+          "false_alarm": 0
+        }
+      },
+      "kinds_exercised": [
+        "number"
+      ],
+      "kinds_not_exercised": [
+        "docid",
+        "date",
+        "name"
+      ],
+      "missed_examples": [],
+      "false_alarm_examples": [],
+      "mean_conflicts_on_flagged": 1.771,
+      "verdict": "在该字段域内，标记可用于**送人工复核**：注入的字段错误全部被捕获，对照样本没有产生假警报。它的定位仍是『可疑，请复核』，不是『确认有错』。",
+      "limitations": [
+        "注入错误只落在检测器覆盖的字段类型（数值/文号/日期）内；字符级 OCR 错误（人名、术语错字）不报警——这是窄域设计，不是回归。",
+        "按『取值组』整体替换，模拟的是系统性读错；单点差异若把旧值改成一个页内已存在的值，集合差会完全看不见——这是当前实现的已知盲区，也意味着报警无法定位到具体出现位置。",
+        "合成件的字段分布与真实扫描件不同；本实验测的是比对机制，不是任何引擎的识别精度。",
+        "页面级报警不等于字段级定位准确；本探针未对单个冲突做人工真值标注。"
+      ]
+    }
+  },
+  "metadata": {
+    "doc_id": "demo_scan-45536714",
+    "engine": "fixture",
+    "domain": "standard",
+    "source": "fixture ingest"
+  },
+  "notes": [
+    "输入是仓库自带的合成件（或由它产生的产物）；识别结果是**构造的**，所以本报告衡量评估机制本身，**不得据此声明 OCR 精度**。",
+    "两个探针都不调用模型、不触网；固定 --seed 后结果可逐字节复现。"
+  ]
+}

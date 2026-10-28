@@ -83,6 +83,55 @@ def extract_high_risk_fields(text: str) -> set[str]:
     return {f for f in fields if f}
 
 
+@dataclass(frozen=True)
+class FieldSpan:
+    """一个高风险字段在原文中的位置。
+
+    `extract_high_risk_fields()` 只返回值集合，够比对用；但**离线探针**
+    需要往第二引擎的文本里**定点注入**一个已知错误，因此需要位置。
+    两者共用同一组正则——探针注入的错误必须落在检测器真正覆盖的字段域内，
+    否则测出来的召回率没有意义。
+    """
+
+    start: int
+    end: int
+    value: str
+    kind: str  # docid / date / name / number
+
+
+# 顺序有意义：先识别更长的复合字段（文号、日期、人名），
+# 再识别普通数值；后者的 span 若完全落在前者内部就跳过。
+_FIELD_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
+    ("docid", _DOC_ID_RE),
+    ("date", _DATE_RE),
+    ("name", _NAME_RE),
+    ("number", _NUMBER_RE),
+)
+
+
+def iter_high_risk_field_spans(text: str) -> list[FieldSpan]:
+    """按位置列出高风险字段，跳过嵌套在复合字段内部的数值。
+
+    为什么要跳过嵌套：`GB/T 11334—2005` 里的 `11334` 与 `2005` 会被
+    `_NUMBER_RE` 单独命中。若把它们也当成独立字段，定点注入时同一个位置
+    会被改两次，样本的"真值"就说不清了。这里保留复合字段，
+    因为它才是跨引擎比对时真正有语义的那个单位。
+    """
+    if not text:
+        return []
+
+    spans: list[FieldSpan] = []
+    covered: list[tuple[int, int]] = []
+    for kind, pattern in _FIELD_PATTERNS:
+        for m in pattern.finditer(text):
+            start, end = m.span(1) if kind == "name" else m.span(0)
+            if any(s <= start and end <= e for s, e in covered):
+                continue
+            spans.append(FieldSpan(start=start, end=end, value=text[start:end], kind=kind))
+            covered.append((start, end))
+    return sorted(spans, key=lambda s: (s.start, s.end))
+
+
 def diff_claims(text_a: str, text_b: str, *, engine_a: str = "A", engine_b: str = "B") -> ClaimDiff:
     """比对两份识别文本的高风险字段。"""
     fa = extract_high_risk_fields(text_a)

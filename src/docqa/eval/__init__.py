@@ -12,6 +12,12 @@ from .metrics import (
     wilson_interval,
 )
 from .noise import DEFAULT_LEVELS, NoiseConfig, inject_noise, noise_sweep_levels
+from .probes import (
+    probe_cross_engine,
+    probe_sentence_support,
+    render_markdown,
+    run_probes,
+)
 from .runner import (
     EvalReport,
     GoldenItem,
@@ -30,4 +36,5 @@ __all__ = [
     "save_baseline", "context_utilization", "EvalReport",
     "generate_mutations", "run_adversarial",
     "NoiseConfig", "inject_noise", "noise_sweep_levels", "DEFAULT_LEVELS",
+    "probe_sentence_support", "probe_cross_engine", "run_probes", "render_markdown",
 ]

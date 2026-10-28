@@ -18,6 +18,23 @@
 （第一项"从部署/启动开始的完整流程"报告覆盖不了——那是命令行的事，
 见根 README 的快速开始。）
 
+## 第二份报告：离线探针（`offline_probes.md` / `.json`）
+
+`demo_eval_report.html` 回答"管线跑出来是什么样"，`offline_probes.md` 回答
+"评估机制本身有多可信"——里面是两个此前写着"未知"的指标：
+
+| 探针 | 实测（合成件，seed=0） |
+|---|---|
+| 句级支撑度若升格为 gate | 精确率 100%（CI 72.2–100%）、召回率 66.7%（CI 41.7–84.8%），n=24 |
+| 跨引擎校验的字段标记 | 注入 35/35 全捕获、4 类对照改写 0 假警报；**仅覆盖 number 字段** |
+
+```powershell
+uv run docqa eval-probes        # 现场 fixture ingest + 两个纯本地探针，不触网
+```
+
+它也**不需要任何密钥**，且不读 `.env`。局限（正例偏易、字段类型覆盖不全、
+单点差异可能看不见）写在报告与 [docs/evaluation.md](../../docs/evaluation.md) 第六之三。
+
 ## 它跑的是什么
 
 - **输入**：`artifacts/demo/demo_scan.pdf` —— 一份**合成件**，内容全部自撰，

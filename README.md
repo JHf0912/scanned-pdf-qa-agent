@@ -7,7 +7,7 @@
 从一张没有文本层的扫描页，到一个带页码与条款号、能自检、也会明确拒答的答案。
 
 [![CI](https://github.com/JHf0912/scanned-pdf-qa-agent/actions/workflows/test.yml/badge.svg)](https://github.com/JHf0912/scanned-pdf-qa-agent/actions/workflows/test.yml)
-[![coverage](https://img.shields.io/badge/coverage-87.7%25-brightgreen)](#测试)
+[![coverage](https://img.shields.io/badge/coverage-88.0%25-brightgreen)](#测试)
 [![python](https://img.shields.io/badge/python-3.12-3776AB?logo=python&logoColor=white)](pyproject.toml)
 [![license](https://img.shields.io/badge/license-MIT-green)](LICENSE)
 [![PyMuPDF](https://img.shields.io/badge/dependency-PyMuPDF%20AGPL--3.0-orange)](docs/deployment.md)
@@ -32,7 +32,7 @@
 | **检索** | BM25 词元 + 字符二元组，RRF 融合，不依赖任何模型 |
 | **自检** | 引用有效性 / 数值落地 / 条号真实性，作为 **gate** |
 | **评估** | 三层指标（索引 → 检索 → 生成）+ 对抗变异 + 噪声扫描 |
-| **规模** | 364 个用例，覆盖率 87.7%；CI 含回归基线门禁 |
+| **规模** | 376 个用例，覆盖率 88.0%；CI 含回归基线门禁 |
 | **许可** | 自身 MIT；依赖 PyMuPDF 为 AGPL-3.0 |
 
 ## 目录
@@ -150,6 +150,10 @@ docker run --rm -p 8000:8000 --env-file .env \
 索引层 CER、逐题明细与自检红绿、对抗变异检出率。双击即可打开。
 
 > 真实文档的对应报告**不入库**：里面含标准正文，与"不再分发"的承诺冲突。
+
+另一份不需要密钥的是
+[`artifacts/report/offline_probes.md`](artifacts/report/offline_probes.md)——用
+`uv run docqa eval-probes` 生成，把句级支撑度与跨引擎标记两项"未测量"变成数字。
 
 ### 跨文档检索
 
@@ -338,7 +342,7 @@ RRF 的分数是 `Σ w/(k+rank)`，k=60 时排名第 1 与第 20 只差约 27%�
 uv run pytest -q --cov=src/docqa --cov-report=term-missing
 ```
 
-**当前覆盖率 87.7%**（3995 条语句中 490 条未覆盖，364 个用例）。
+**当前覆盖率 88.0%**（4290 条语句中 513 条未覆盖；376 个用例中 372 通过、4 个 live 用例跳过）。
 默认用例全部 mock 外部依赖、**不读真实文档，也不读 `.env`**：
 `tests/conftest.py` 在收集用例之前清掉全部 `DOCQA_*` 环境变量，并置
 `DOCQA_DISABLE_DOTENV=1`，让 `load_config()` 不再自动读项目根的 `.env`。
@@ -350,6 +354,7 @@ uv run pytest -q --cov=src/docqa --cov-report=term-missing
 | 通道 | 命令 | 说明 |
 |:---|:---|:---|
 | 默认 | `uv run pytest -q` | mock 外部依赖、不读 `.env`；**任何机器上都不碰网络** |
+| 离线探针 | `uv run docqa eval-probes` | 在合成件上测评估机制本身（句级支撑度 / 跨引擎标记），同样不读 `.env` |
 | 真实端点 | `uv run pytest -m live --live -q` | 真的打一次端点，会产生少量费用 |
 | CI | `ruff check` → `pytest` → 基线重跑 | 覆盖率低于 84% 或指标下滑即失败 |
 
@@ -398,7 +403,7 @@ uv run docqa eval --doc out/demo/<产物> --golden data/golden/demo_qa.jsonl `
 | 真实文档端到端 | ⚠️ 部分 | 抽取式 44.4%；生成 55.6%–61.1% |
 | 索引层质量 | ✅ 干净 | CER 0.38%，表格单元格 100% |
 | 自检 / 拒答 | ✅ 有机制、有测试 | 六类拒答 + 对抗变异检出率 |
-| 跨引擎校验 | ⚠️ 未实测 | 机制就绪，真实文档未跑 |
+| 跨引擎校验 | ⚠️ 部分实测 | 合成件注入字段 35/35、假警报 0；真实文档未跑 |
 | 容器镜像 | ⚠️ 未构建 | 静态检查通过，`docker build` 未执行 |
 
 ### 已完成并验证
@@ -412,10 +417,12 @@ uv run docqa eval --doc out/demo/<产物> --golden data/golden/demo_qa.jsonl `
   六类拒答与歧义检测、有界修复循环；
 - **评估与工程**：对抗变异套件、三层评估与 Wilson 区间、**OCR 噪声扫描入口**、
   **提示注入扫描**、延迟 p50/p95、回归基线 + CI 门禁、
-  **真实端点冒烟通道**（`pytest -m live --live`）；
+  **真实端点冒烟通道**（`pytest -m live --live`）、
+  **两项"未测量"的离线探针**（`docqa eval-probes`：句级支撑度与跨引擎标记的
+  精确率/召回率，数字与局限见 [docs/evaluation.md](docs/evaluation.md) 第六之三）；
 - **交付**：CLI + Web UI + 静态报告、双 provider + 无模型回退、
-  五个业务场景 profile、**容器镜像与部署文档**、87.7% 覆盖率
-  （`pytest --cov=src/docqa`，3995 行中 490 行未覆盖）、完整文档。
+  五个业务场景 profile、**容器镜像与部署文档**、88.0% 覆盖率
+  （`pytest --cov=src/docqa`，4290 行中 513 行未覆盖）、完整文档。
 
 合成件上跑通全链路：类型判定 → 识别 → 切分 → 检索 → 问答 → 自检 → 拒答 → 评估 → 报告。
 
@@ -472,9 +479,17 @@ uv run docqa eval --doc out/demo/<产物> --golden data/golden/demo_qa.jsonl `
 #### 4. 跨引擎一致性校验默认不启用
 
 它需要**第二个不同模型**的端点，每页再识别一次、成本翻倍。
-机制已接进 `ingest`（`engine2` 参数）、有 7 个端到端用例覆盖，
-但**没有在真实文档上跑过**，因此"它标出的可疑字段里有多少是真的错"
-这个精确率**未知**。配 `DOCQA_OCR2_*` 即启用；配成与主引擎相同的模型会被**主动拒绝**，
+机制已接进 `ingest`（`engine2` 参数）、有 7 个端到端用例覆盖。
+
+**合成件上已离线测过**（`uv run docqa eval-probes`，不需要第二个端点）：
+把每个高风险字段取值的所有出现一起改掉当作第二引擎的已知错误，
+35 组注入全部被捕获；空行/标点/追加文本/非字段错字 4 类对照改写
+一次假警报都没有（精确率与召回率都是 100%，95% CI 90.1%–100%）。
+但这**只覆盖了 `number` 字段**——合成件的文号形态不匹配检测器的文号正则，
+`docid`/`date`/`name` 尚未被测；而且注入在检测器自己的字段词表内，
+召回率天然偏乐观。所以**真实文档上"标记里有多少是真的错"仍然未知**。
+
+配 `DOCQA_OCR2_*` 即启用；配成与主引擎相同的模型会被**主动拒绝**，
 因为那样比对必然一致，是个永远不会失败的检查。
 
 #### 5. 检索层指标只在合成件上是真的
@@ -489,9 +504,17 @@ Recall@10 100%、MRR 0.95、nDCG 0.963；真实文档的金标集还没标相关
 
 会标 `parse_degraded`，不静默出错。
 
-#### 7. 句级支撑度是启发式的
+#### 7. 句级支撑度是启发式的：已实测，仍不当门
 
-**需实测精确率后才决定能否当门**。
+`uv run docqa eval-probes` 在合成件上构造了 24 个带标签样本
+（证据原句、调序、改述为正例；无关整句、真假混合、跨片段串内容为负例）。
+实测**精确率 100%**（95% CI 72.2%–100%）、**召回率 66.7%**（95% CI 41.7%–84.8%）：
+漏报全部是"一句真 + 一句假"，2 句里 1 句有支撑、分数正好落在 0.5 阈值上。
+
+所以它**维持咨询性指标、不升格为 gate**。精确率还是**上限**——
+正例是证据原句（词面重叠最高），真实答案一旦改述，假阳性只会更多。
+数字、阈值扫描与复现命令见
+[docs/evaluation.md](docs/evaluation.md#六之三两项未测量的离线探针已实测)。
 
 #### 8. 三类场景只有配置与机制准备
 
