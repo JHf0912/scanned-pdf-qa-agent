@@ -1,0 +1,20 @@
+{
+  "engine": "fixture",
+  "doc_id": "demo_scan-45536714",
+  "domain": "standard",
+  "created_at": "2026-10-21T08:04:36",
+  "metrics": {
+    "items": 13,
+    "passed": 11,
+    "accuracy": 0.8461538461538461,
+    "refusal_precision": 1.0,
+    "refusal_recall": 1.0,
+    "gate_pass_rate": 1.0,
+    "citation_validity_rate": 1.0,
+    "mean_context_utilization": 0.8461538461538461,
+    "mean_attempts": 1.0,
+    "retrieval_recall_at_k": 1.0,
+    "retrieval_mrr": 0.95,
+    "retrieval_ndcg_at_k": 0.9631
+  }
+}

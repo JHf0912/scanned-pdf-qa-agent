@@ -8,10 +8,16 @@
     "accuracy": 0.8461538461538461,
     "refusal_precision": 1.0,
     "refusal_recall": 1.0,
+    "gate_pass_rate": 1.0,
     "citation_validity_rate": 1.0,
     "mean_context_utilization": 0.8461538461538461,
     "mean_attempts": 1.0,
-    "total_cost_usd": 0.0
+    "total_cost_usd": 0.0,
+    "latency_p50_ms": 2.0,
+    "latency_p95_ms": 6.0,
+    "retrieval_recall_at_k": 1.0,
+    "retrieval_mrr": 0.95,
+    "retrieval_ndcg_at_k": 0.9631
   },
   "intervals": {
     "accuracy": [
@@ -24,6 +30,10 @@
     ],
     "refusal_recall": [
       0.34237195288961925,
+      1.0
+    ],
+    "recall_at_k": [
+      0.7224598312333834,
       1.0
     ]
   },
@@ -78,6 +88,7 @@
     {
       "qid": "D1",
       "category": "clause",
+      "expected_refusal": false,
       "refused": false,
       "reason": null,
       "answer": "（未配置生成模型，以下为检索到的证据原文）\n3.1  示例件的额定载荷应大于等于 12.5 kN。 [p.1 §3.1]\n1  范围 本文件规定了示例件的术语、技术要求与验收规则。 本文件适用于示例件的设计、制造与验收。 [p.1 §1]\n3.4  示例件的密封等级应不低于 IP54。 [p.1 §3.4]\n3.3  示例件的工作温度范围为 -20 ℃ ~ 60 ℃。 [p.1 §3.3]\n2  规范性引用文件 Q/EXAMPLE 100—2025  示例件通用要求 Q/EXAMPLE 200—2024  示例件检验方法 [p.1 §2]\n4  验收规则 示例件的检验项目与合格质量水平见表 1",
@@ -101,7 +112,7 @@
         "draft",
         "verify"
       ],
-      "elapsed_ms": 4,
+      "elapsed_ms": 6,
       "est_cost_usd": 0.0,
       "missing_facts": [],
       "forbidden_hits": [],
@@ -112,6 +123,7 @@
     {
       "qid": "D2",
       "category": "clause",
+      "expected_refusal": false,
       "refused": false,
       "reason": null,
       "answer": "（未配置生成模型，以下为检索到的证据原文）\n3.3  示例件的工作温度范围为 -20 ℃ ~ 60 ℃。 [p.1 §3.3]\n1  范围 本文件规定了示例件的术语、技术要求与验收规则。 本文件适用于示例件的设计、制造与验收。 [p.1 §1]\n3.4  示例件的密封等级应不低于 IP54。 [p.1 §3.4]\n3.1  示例件的额定载荷应大于等于 12.5 kN。 [p.1 §3.1]\n4  验收规则 示例件的检验项目与合格质量水平见表 1。 [p.2 §4]\n2  规范性引用文件 Q/EXAMPLE 100—2025  示例件通用要求 Q/EXAMPLE 200—2024  示例件检验方",
@@ -135,7 +147,7 @@
         "draft",
         "verify"
       ],
-      "elapsed_ms": 1,
+      "elapsed_ms": 3,
       "est_cost_usd": 0.0,
       "missing_facts": [],
       "forbidden_hits": [],
@@ -146,6 +158,7 @@
     {
       "qid": "D3",
       "category": "clause",
+      "expected_refusal": false,
       "refused": false,
       "reason": null,
       "answer": "（未配置生成模型，以下为检索到的证据原文）\n3.4  示例件的密封等级应不低于 IP54。 [p.1 §3.4]\n1  范围 本文件规定了示例件的术语、技术要求与验收规则。 本文件适用于示例件的设计、制造与验收。 [p.1 §1]\n3.1  示例件的额定载荷应大于等于 12.5 kN。 [p.1 §3.1]\n3.3  示例件的工作温度范围为 -20 ℃ ~ 60 ℃。 [p.1 §3.3]\n2  规范性引用文件 Q/EXAMPLE 100—2025  示例件通用要求 Q/EXAMPLE 200—2024  示例件检验方法 [p.1 §2]\n4  验收规则 示例件的检验项目与合格质量水平见表 1",
@@ -169,7 +182,7 @@
         "draft",
         "verify"
       ],
-      "elapsed_ms": 1,
+      "elapsed_ms": 2,
       "est_cost_usd": 0.0,
       "missing_facts": [],
       "forbidden_hits": [],
@@ -180,6 +193,7 @@
     {
       "qid": "D4",
       "category": "clause",
+      "expected_refusal": false,
       "refused": false,
       "reason": null,
       "answer": "（未配置生成模型，以下为检索到的证据原文）\n3.5  当公称直径 d 大于 8 mm 时，壁厚 t 应按 Q/EXAMPLE 100—2025 的规定，d ≤ 20 mm 取 2.0 mm；d > 20 mm 取 3.0 mm。 [p.1 §3.5]\n3.1  示例件的额定载荷应大于等于 12.5 kN。 [p.1 §3.1]\n**表 1  检验项目与合格质量水平 AQL** | 检验项目 | 合格质量水平 AQL | 合格质量水平 AQL | 合格质量水平 AQL | | 检验项目 | 甲型 | 乙型 | 丙型 | |---|---|---|---| | 外径 | 1.0 | 1.0 | 1",
@@ -203,7 +217,7 @@
         "draft",
         "verify"
       ],
-      "elapsed_ms": 1,
+      "elapsed_ms": 3,
       "est_cost_usd": 0.0,
       "missing_facts": [],
       "forbidden_hits": [],
@@ -214,6 +228,7 @@
     {
       "qid": "D5",
       "category": "clause",
+      "expected_refusal": false,
       "refused": false,
       "reason": null,
       "answer": "（未配置生成模型，以下为检索到的证据原文）\n1  范围 本文件规定了示例件的术语、技术要求与验收规则。 本文件适用于示例件的设计、制造与验收。 [p.1 §1]\n2  规范性引用文件 Q/EXAMPLE 100—2025  示例件通用要求 Q/EXAMPLE 200—2024  示例件检验方法 [p.1 §2]\n3.4  示例件的密封等级应不低于 IP54。 [p.1 §3.4]\n3.3  示例件的工作温度范围为 -20 ℃ ~ 60 ℃。 [p.1 §3.3]\n3.1  示例件的额定载荷应大于等于 12.5 kN。 [p.1 §3.1]\n4  验收规则 示例件的检验项目与合格质量水平见表 1",
@@ -248,6 +263,7 @@
     {
       "qid": "T1",
       "category": "table",
+      "expected_refusal": false,
       "refused": false,
       "reason": null,
       "answer": "（未配置生成模型，以下为检索到的证据原文）\n**表 1  检验项目与合格质量水平 AQL** | 检验项目 | 合格质量水平 AQL | 合格质量水平 AQL | 合格质量水平 AQL | | 检验项目 | 甲型 | 乙型 | 丙型 | |---|---|---|---| | 外径 | 1.0 | 1.0 | 1.5 | | 壁厚 | 2.5 | 2.5 | 2.5 | | 长度 | 4 | — | 4 | | 密封等级 | — | 2.5 | — | [p.2 §表 1]\n4  验收规则 示例件的检验项目与合格质量水平见表 1。 [p.2 §4]\n1  范围 本文件规定了示例件的术语、技术要",
@@ -271,7 +287,7 @@
         "draft",
         "verify"
       ],
-      "elapsed_ms": 1,
+      "elapsed_ms": 2,
       "est_cost_usd": 0.0,
       "missing_facts": [],
       "forbidden_hits": [
@@ -284,6 +300,7 @@
     {
       "qid": "T2",
       "category": "table",
+      "expected_refusal": false,
       "refused": false,
       "reason": null,
       "answer": "（未配置生成模型，以下为检索到的证据原文）\n**表 1  检验项目与合格质量水平 AQL** | 检验项目 | 合格质量水平 AQL | 合格质量水平 AQL | 合格质量水平 AQL | | 检验项目 | 甲型 | 乙型 | 丙型 | |---|---|---|---| | 外径 | 1.0 | 1.0 | 1.5 | | 壁厚 | 2.5 | 2.5 | 2.5 | | 长度 | 4 | — | 4 | | 密封等级 | — | 2.5 | — | [p.2 §表 1]\n4  验收规则 示例件的检验项目与合格质量水平见表 1。 [p.2 §4]\n3.5  当公称直径 d 大于 8 mm 时",
@@ -307,7 +324,7 @@
         "draft",
         "verify"
       ],
-      "elapsed_ms": 1,
+      "elapsed_ms": 6,
       "est_cost_usd": 0.0,
       "missing_facts": [],
       "forbidden_hits": [],
@@ -318,6 +335,7 @@
     {
       "qid": "T3",
       "category": "table",
+      "expected_refusal": false,
       "refused": false,
       "reason": null,
       "answer": "（未配置生成模型，以下为检索到的证据原文）\n**表 1  检验项目与合格质量水平 AQL** | 检验项目 | 合格质量水平 AQL | 合格质量水平 AQL | 合格质量水平 AQL | | 检验项目 | 甲型 | 乙型 | 丙型 | |---|---|---|---| | 外径 | 1.0 | 1.0 | 1.5 | | 壁厚 | 2.5 | 2.5 | 2.5 | | 长度 | 4 | — | 4 | | 密封等级 | — | 2.5 | — | [p.2 §表 1]\n4  验收规则 示例件的检验项目与合格质量水平见表 1。 [p.2 §4]\n1  范围 本文件规定了示例件的术语、技术要",
@@ -341,7 +359,7 @@
         "draft",
         "verify"
       ],
-      "elapsed_ms": 1,
+      "elapsed_ms": 2,
       "est_cost_usd": 0.0,
       "missing_facts": [],
       "forbidden_hits": [],
@@ -352,6 +370,7 @@
     {
       "qid": "T4",
       "category": "table",
+      "expected_refusal": false,
       "refused": false,
       "reason": null,
       "answer": "（未配置生成模型，以下为检索到的证据原文）\n**表 1  检验项目与合格质量水平 AQL** | 检验项目 | 合格质量水平 AQL | 合格质量水平 AQL | 合格质量水平 AQL | | 检验项目 | 甲型 | 乙型 | 丙型 | |---|---|---|---| | 外径 | 1.0 | 1.0 | 1.5 | | 壁厚 | 2.5 | 2.5 | 2.5 | | 长度 | 4 | — | 4 | | 密封等级 | — | 2.5 | — | [p.2 §表 1]\n3.4  示例件的密封等级应不低于 IP54。 [p.1 §3.4]\n4  验收规则 示例件的检验项目与合格质量水平见表",
@@ -386,6 +405,7 @@
     {
       "qid": "N1",
       "category": "no_answer",
+      "expected_refusal": true,
       "refused": true,
       "reason": "not_in_document",
       "answer": "",
@@ -410,6 +430,7 @@
     {
       "qid": "N2",
       "category": "no_answer",
+      "expected_refusal": true,
       "refused": true,
       "reason": "not_in_document",
       "answer": "",
@@ -434,6 +455,7 @@
     {
       "qid": "G1",
       "category": "negation",
+      "expected_refusal": false,
       "refused": false,
       "reason": null,
       "answer": "（未配置生成模型，以下为检索到的证据原文）\n1  范围 本文件规定了示例件的术语、技术要求与验收规则。 本文件适用于示例件的设计、制造与验收。 [p.1 §1]\n2  规范性引用文件 Q/EXAMPLE 100—2025  示例件通用要求 Q/EXAMPLE 200—2024  示例件检验方法 [p.1 §2]\n3.4  示例件的密封等级应不低于 IP54。 [p.1 §3.4]\n3.3  示例件的工作温度范围为 -20 ℃ ~ 60 ℃。 [p.1 §3.3]\n3.1  示例件的额定载荷应大于等于 12.5 kN。 [p.1 §3.1]\n4.1  按 Q/EXAMPLE 200—2024 的",
@@ -470,6 +492,7 @@
     {
       "qid": "O1",
       "category": "ocr_stress",
+      "expected_refusal": false,
       "refused": false,
       "reason": null,
       "answer": "（未配置生成模型，以下为检索到的证据原文）\n1  范围 本文件规定了示例件的术语、技术要求与验收规则。 本文件适用于示例件的设计、制造与验收。 [p.1 §1]\n2  规范性引用文件 Q/EXAMPLE 100—2025  示例件通用要求 Q/EXAMPLE 200—2024  示例件检验方法 [p.1 §2]\n示例技术规范 Q/EXAMPLE 001—2026 [p.1 ¶1]",
@@ -492,7 +515,7 @@
         "draft",
         "verify"
       ],
-      "elapsed_ms": 1,
+      "elapsed_ms": 2,
       "est_cost_usd": 0.0,
       "missing_facts": [],
       "forbidden_hits": [],
@@ -534,9 +557,110 @@
     "character_accuracy": 0.9979,
     "numeric_field_recall": 1.0
   },
+  "retrieval": {
+    "metrics": {
+      "retrieval_recall_at_k": 1.0,
+      "retrieval_mrr": 0.95,
+      "retrieval_ndcg_at_k": 0.9631
+    },
+    "n": 10,
+    "k": 10,
+    "per_item": [
+      {
+        "qid": "D1",
+        "category": "clause",
+        "recall_at_k": 1.0,
+        "rr": 1.0,
+        "ndcg_at_k": 1.0
+      },
+      {
+        "qid": "D2",
+        "category": "clause",
+        "recall_at_k": 1.0,
+        "rr": 1.0,
+        "ndcg_at_k": 1.0
+      },
+      {
+        "qid": "D3",
+        "category": "clause",
+        "recall_at_k": 1.0,
+        "rr": 1.0,
+        "ndcg_at_k": 1.0
+      },
+      {
+        "qid": "D4",
+        "category": "clause",
+        "recall_at_k": 1.0,
+        "rr": 1.0,
+        "ndcg_at_k": 1.0
+      },
+      {
+        "qid": "D5",
+        "category": "clause",
+        "recall_at_k": 1.0,
+        "rr": 1.0,
+        "ndcg_at_k": 1.0
+      },
+      {
+        "qid": "T1",
+        "category": "table",
+        "recall_at_k": 1.0,
+        "rr": 1.0,
+        "ndcg_at_k": 1.0
+      },
+      {
+        "qid": "T2",
+        "category": "table",
+        "recall_at_k": 1.0,
+        "rr": 1.0,
+        "ndcg_at_k": 1.0
+      },
+      {
+        "qid": "T3",
+        "category": "table",
+        "recall_at_k": 1.0,
+        "rr": 1.0,
+        "ndcg_at_k": 1.0
+      },
+      {
+        "qid": "T4",
+        "category": "table",
+        "recall_at_k": 1.0,
+        "rr": 1.0,
+        "ndcg_at_k": 1.0
+      },
+      {
+        "qid": "O1",
+        "category": "ocr_stress",
+        "recall_at_k": 1.0,
+        "rr": 0.5,
+        "ndcg_at_k": 0.6309297535714575
+      }
+    ],
+    "per_category": {
+      "clause": {
+        "n": 5,
+        "recall_at_k": 1.0,
+        "mrr": 1.0,
+        "ndcg_at_k": 1.0
+      },
+      "ocr_stress": {
+        "n": 1,
+        "recall_at_k": 1.0,
+        "mrr": 0.5,
+        "ndcg_at_k": 0.6309
+      },
+      "table": {
+        "n": 4,
+        "recall_at_k": 1.0,
+        "mrr": 1.0,
+        "ndcg_at_k": 1.0
+      }
+    }
+  },
   "adversarial": {
     "total_mutations": 108,
-    "overall_detection_rate": 0.6574074074074074,
+    "overall_detection_rate": 0.8055555555555556,
     "by_kind": {
       "citation": {
         "detected": 11,
@@ -565,14 +689,10 @@
         ]
       },
       "number": {
-        "detected": 28,
+        "detected": 44,
         "total": 44,
-        "rate": 0.636,
-        "misses": [
-          "改动了数值",
-          "改动了数值",
-          "改动了数值"
-        ]
+        "rate": 1.0,
+        "misses": []
       },
       "unit": {
         "detected": 2,
@@ -590,12 +710,49 @@
       "fabricate": "（无专门机制——纯文字编造需要句级支撑度或人工复核）"
     }
   },
-  "noise": {},
+  "noise": {
+    "levels": [
+      {
+        "level": 0.0,
+        "actual_cer": 0.0,
+        "accuracy": 0.8462,
+        "refusal_precision": 1.0,
+        "refusal_recall": 1.0,
+        "gate_pass_rate": 1.0,
+        "passed": 11,
+        "items": 13
+      },
+      {
+        "level": 0.02,
+        "actual_cer": 0.0236,
+        "accuracy": 0.8462,
+        "refusal_precision": 1.0,
+        "refusal_recall": 1.0,
+        "gate_pass_rate": 1.0,
+        "passed": 11,
+        "items": 13
+      },
+      {
+        "level": 0.05,
+        "actual_cer": 0.0668,
+        "accuracy": 0.8462,
+        "refusal_precision": 1.0,
+        "refusal_recall": 1.0,
+        "gate_pass_rate": 1.0,
+        "passed": 11,
+        "items": 13
+      }
+    ],
+    "seed": 0,
+    "method": "在切分之前污染正文块，再重建索引与问答 Agent；表格块不污染。同档位的实际 CER 一并报出，因为实际改动量并不等于配置的 level。",
+    "path": "extractive"
+  },
   "notes": [
     "本次运行使用 fixture 引擎，**不是真实 OCR 结果**，不得据此声明 OCR 精度。",
-    "语料仅 16 个片段，Recall@k / MRR 在如此小的语料上没有统计意义（Recall@1 的随机基线即 1/16）。这里把它当作**管路连通性检查**报告，不作为检索质量证据。"
+    "语料仅 16 个片段，Recall@k / MRR 在如此小的语料上没有统计意义（Recall@1 的随机基线即 1/16）。这里把它当作**管路连通性检查**报告，不作为检索质量证据。",
+    "噪声结论：在实测的噪声档位内（最高实际 CER 6.7%），准确率未出现 20 个百分点以上的下滑。这不代表系统抗噪——只是这次注入的字符恰好不在答案略上。"
   ],
-  "elapsed_s": 0.02,
+  "elapsed_s": 0.04,
   "manifest": {
     "doc_id": "demo_scan-45536714",
     "source": {
@@ -607,8 +764,7 @@
     "detect": {
       "kind": "SCANNED",
       "cross_engine": {
-        "pdftotext_available": 1.0,
-        "pdftotext_chars_total": 0.0,
+        "pdftotext_available": 0.0,
         "pymupdf_chars_total": 0.0
       },
       "pages": [
@@ -630,14 +786,6 @@
               "passed": false,
               "detail": "PyMuPDF 抽出 0 个有效字符（阈值 10）",
               "source": "pymupdf"
-            },
-            {
-              "name": "pdftotext_chars",
-              "value": 0,
-              "threshold": 10,
-              "passed": false,
-              "detail": "pdftotext 独立抽出 0 个有效字符",
-              "source": "pdftotext"
             },
             {
               "name": "font_resources",
@@ -683,14 +831,6 @@
               "passed": false,
               "detail": "PyMuPDF 抽出 0 个有效字符（阈值 10）",
               "source": "pymupdf"
-            },
-            {
-              "name": "pdftotext_chars",
-              "value": 0,
-              "threshold": 10,
-              "passed": false,
-              "detail": "pdftotext 独立抽出 0 个有效字符",
-              "source": "pdftotext"
             },
             {
               "name": "font_resources",
@@ -773,6 +913,12 @@
       "avg_chars": 43.8,
       "citation_mode": "clause"
     },
+    "injection": {
+      "scanned": true,
+      "pages_scanned": 2,
+      "hits": [],
+      "by_kind": {}
+    },
     "index": {
       "chunks": 16,
       "arms": [
@@ -803,6 +949,6 @@
       "latency_ms": 0,
       "pages": 2
     },
-    "elapsed_s": 0.77
+    "elapsed_s": 1.18
   }
 }
