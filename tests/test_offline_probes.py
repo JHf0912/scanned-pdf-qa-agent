@@ -18,12 +18,19 @@ from typer.testing import CliRunner
 
 from conftest import PROJECT_ROOT, make_block, make_page
 from docqa.cli import app
+from docqa.eval.corruption import (
+    alternate_values,
+    contains_token,
+    pick_target,
+    probe_targeted_corruption,
+)
 from docqa.eval.probes import (
     probe_cross_engine,
     probe_sentence_support,
     render_markdown,
     run_probes,
 )
+from docqa.eval.runner import GoldenItem
 from docqa.models import Chunk
 from docqa.ocr.spotcheck import diff_claims
 
@@ -152,6 +159,130 @@ class TestCrossEngineProbe:
         assert diff_claims(a, b).agreed is True
 
 
+def _labeled_chunk(cid: str, text: str, label: str, ordinal: int) -> Chunk:
+    return Chunk(
+        chunk_id=cid,
+        doc_id="d",
+        page_no=1,
+        ordinal=ordinal,
+        kind="clause",
+        text=text,
+        clause_label=label,
+    )
+
+
+@pytest.fixture
+def corruption_corpus() -> tuple[list[Chunk], list[GoldenItem]]:
+    """三片段小语料：每个数值字段在整份语料里都只出现一次。"""
+    chunks = [
+        _labeled_chunk("d:p1:c1", "3.1 示例件的额定载荷应大于等于 12.5 kN。", "3.1", 1),
+        _labeled_chunk("d:p1:c2", "3.2 示例件表面不允许有裂纹。", "3.2", 2),
+        _labeled_chunk("d:p1:c3", "3.3 示例件的工作温度范围为 -20 ℃ ~ 60 ℃。", "3.3", 3),
+    ]
+    items = [
+        GoldenItem(
+            qid="Q1", question="示例件的额定载荷要求是多少？", category="clause",
+            must_contain=["12.5", "kN"], relevant_chunk_ids=["p1:c1"],
+        ),
+        GoldenItem(
+            qid="Q2", question="示例件的工作温度范围是多少？", category="clause",
+            must_contain=["-20", "60"], relevant_chunk_ids=["p1:c3"],
+        ),
+    ]
+    return chunks, items
+
+
+class TestTargetedCorruptionProbe:
+    """噪声命中答案字段时，系统会不会"忠实于错误证据"地答错。"""
+
+    def test_hitting_the_answer_field_produces_silent_wrong_answers(
+        self, corruption_corpus
+    ):
+        chunks, items = corruption_corpus
+        report = probe_targeted_corruption(chunks, items)
+
+        assert report["n_treatment"] == 2
+        assert report["silent_wrong"]["count"] == 2
+        assert report["silent_wrong"]["rate"] == 1.0
+        # 关键点：错答案不是被哪条 gate 抓住，而是**全过了**
+        for sample in report["samples"]:
+            if sample["arm"] != "treatment":
+                continue
+            assert sample["gates_passed"] is True
+            assert sample["gate_status"]["numeric_grounding"] is True
+            assert sample["contains_corrupted"] is True
+            assert sample["contains_original"] is False
+
+    def test_control_arm_reaches_the_answer_without_breaking_it(
+        self, corruption_corpus
+    ):
+        chunks, items = corruption_corpus
+        report = probe_targeted_corruption(chunks, items)
+
+        # 对照改动必须真的进入了答案，否则"没影响"只是因为它没被引用
+        assert report["control_reached_answer"]["count"] == report["n_control"]
+        assert report["control_preserved"]["count"] == report["n_control"]
+        assert report["control_preserved"]["rate"] == 1.0
+
+    def test_probe_is_deterministic(self, corruption_corpus):
+        chunks, items = corruption_corpus
+        assert (
+            probe_targeted_corruption(chunks, items)
+            == probe_targeted_corruption(chunks, items)
+        )
+
+    def test_non_unique_answer_field_is_excluded_with_reason(self):
+        """同一个值出现在两个片段时，污染后原值仍在语料里，判据不再无歧义。"""
+        chunks = [
+            _labeled_chunk("d:p1:c1", "3.1 额定载荷应大于等于 12.5 kN。", "3.1", 1),
+            _labeled_chunk("d:p1:c2", "3.2 备用载荷也为 12.5 kN。", "3.2", 2),
+        ]
+        item = GoldenItem(
+            qid="Q1", question="示例件的额定载荷要求是多少？", category="clause",
+            must_contain=["12.5"], relevant_chunk_ids=["p1:c1"],
+        )
+        target, reason = pick_target(item, chunks)
+        assert target is None
+        assert "不唯一" in reason
+
+    def test_non_numeric_answer_fact_is_excluded_with_reason(self):
+        chunks = [_labeled_chunk("d:p1:c1", "3.1 本文件适用于示例件。", "3.1", 1)]
+        item = GoldenItem(
+            qid="Q1", question="本文件的适用范围是什么？", category="clause",
+            must_contain=["适用"], relevant_chunk_ids=["p1:c1"],
+        )
+        target, reason = pick_target(item, chunks)
+        assert target is None
+        assert "不含数字" in reason
+
+    def test_excluded_questions_are_reported_not_dropped(self, corruption_corpus):
+        chunks, items = corruption_corpus
+        items = items + [
+            GoldenItem(
+                qid="Q3", question="示例件的质保期是多久？", category="no_answer",
+                expected_refusal=True,
+            )
+        ]
+        report = probe_targeted_corruption(chunks, items)
+        assert [e["qid"] for e in report["excluded"]] == ["Q3"]
+
+
+class TestCorruptionHelpers:
+    def test_alternate_values_keep_length_and_avoid_zero(self):
+        values = alternate_values("1.0")
+        assert values[0] == "2.0"  # 先试离原值最近的改动
+        assert all(len(v) == len("1.0") for v in values)
+        assert "0.0" not in values
+        assert "1.1" in values  # 换个数字位，避免与语料中已有的 2.0/3.0 冲突
+
+    def test_token_boundary_does_not_match_inside_other_numbers(self):
+        assert contains_token("条款 4.1 的取值", "4") is False
+        assert contains_token("4  验收规则", "4") is True
+        assert contains_token("1.5 与 1.0", "1.0") is True
+        # `54` 是 `IP54` 的一部分：这解释了对照组为什么必须按字符区间排除
+        assert contains_token("密封等级 IP54", "54") is True
+
+
 class TestProbeReport:
     def test_markdown_contains_numbers_command_and_limitations(
         self, probe_page, probe_chunks
@@ -169,6 +300,21 @@ class TestProbeReport:
         assert "精确率" in md and "召回率" in md
         assert "uv run docqa eval-probes" in md
         assert "已知局限" in md
+
+    def test_markdown_renders_the_targeted_corruption_section(
+        self, probe_page, corruption_corpus
+    ):
+        chunks, items = corruption_corpus
+        payload = run_probes([probe_page], chunks, seed=0, items=items)
+        payload["metadata"] = {
+            "doc_id": "d", "engine": "fixture", "domain": "standard", "source": "test"
+        }
+        md = render_markdown(payload)
+
+        assert "定向污染" in md
+        assert "静默错误率" in md
+        assert "numeric_grounding" in md or "数值落地" in md
+        assert payload["probes"]["targeted_corruption"]["n_treatment"] == 2
 
     def test_payload_is_json_serialisable(self, probe_page, probe_chunks):
         payload = run_probes([probe_page], probe_chunks, seed=0)
@@ -204,3 +350,8 @@ class TestEvalProbesCli:
         assert payload["probes"]["sentence_support"]["n"] > 0
         assert payload["probes"]["cross_engine_spotcheck"]["n"] > 0
         assert payload["probes"]["cross_engine_spotcheck"]["confusion"]["fp"] == 0
+        # 默认 --golden 存在时必须跑定向污染，否则"静默错答"那项又退回未测量
+        corruption = payload["probes"]["targeted_corruption"]
+        assert corruption["n_treatment"] > 0
+        assert corruption["silent_wrong"]["count"] > 0
+        assert "定向污染" in report.read_text(encoding="utf-8")

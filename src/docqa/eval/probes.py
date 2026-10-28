@@ -1,4 +1,4 @@
-"""离线探针：把评估层"未知/未测量"的两项变成可复现的数字。
+"""离线探针：把评估层"未知/未测量"的几项变成可复现的数字。
 
 要回答的问题
 ------------
@@ -8,15 +8,20 @@
    但**没有实测过精确率**，所以默认只上报、不当 gate。
 2. **跨引擎一致性校验的精确率未知**——机制已接进 `ingest`，
    但它标出的可疑字段里有多少是真的错，没有数字。
+3. **噪声命中答案字段时系统会怎样**——随机噪声扫描没有让准确率下滑，
+   但那只是注入的字符没落在答案依赖的数字上；定向污染没测过。
+   （第 3 项在 `eval/corruption.py`，需要金标题，故单独成模块。）
 
-这两项都不需要模型、不需要真实文档，**在合成件上就能离线测量**：
+这三项都不需要模型、不需要真实文档，**在合成件上就能离线测量**：
 
 - 句级支撑度：程序化构造"应当有支撑"与"不应当有支撑"的答案样本，
   直接调用 `qa.verify.check_sentence_support`，按"把它当门"的口径
   算精确率/召回率；
 - 跨引擎校验：把同一页文本当成引擎 A，**定点改写一个高风险字段**
   当作引擎 B 的识别错误，再用 `ocr.spotcheck.diff_claims` 判断是否报警；
-  另配若干"只改无关字符"的对照样本，用来量假警报。
+  另配若干"只改无关字符"的对照样本，用来量假警报；
+- 定向污染：把答案所依赖、且语料中唯一的字段改掉，用抽取式 Agent
+  真实作答，看是否"照抄错值且全部 gate 通过"（见 `corruption.py`）。
 
 必须说清楚的边界
 ----------------
@@ -37,10 +42,13 @@ import random
 import re
 from dataclasses import dataclass
 
+from ..config import Config, DomainProfile
 from ..models import Chunk, Citation, OcrPage
 from ..ocr.spotcheck import diff_claims, iter_high_risk_field_spans
 from ..qa.verify import check_sentence_support
+from .corruption import bump_first_digit, probe_targeted_corruption, render_section
 from .metrics import wilson_interval
+from .runner import GoldenItem
 
 # 与 `check_sentence_support` 内部一致：句子最短长度与"判定有支撑"的阈值。
 SENTENCE_MIN_LEN = 6
@@ -317,16 +325,6 @@ class SpotcheckSample:
     conflicts: int = 0
 
 
-def _bump_first_digit(value: str) -> str | None:
-    """把第一个数字改成另一个数字。长度不变，因此注入后所有 span 位置仍然有效。"""
-    for i, ch in enumerate(value):
-        if ch.isdigit():
-            new = str((int(ch) + 1) % 10)
-            if new != ch:
-                return value[:i] + new + value[i + 1 :]
-    return None
-
-
 def _mutate_value_groups(text: str, page_no: int) -> list[SpotcheckSample]:
     """对页内每个**不同的高风险字段取值**，把所有出现位置一起改掉。
 
@@ -344,7 +342,7 @@ def _mutate_value_groups(text: str, page_no: int) -> list[SpotcheckSample]:
 
     samples: list[SpotcheckSample] = []
     for value, group in sorted(groups.items(), key=lambda kv: kv[1][0].start):
-        new_value = _bump_first_digit(value)
+        new_value = bump_first_digit(value)
         if new_value is None:
             continue  # 人名等无数字字段无法用"改数字"注入，跳过并如实体现在样本量里
         mutated = text
@@ -512,16 +510,29 @@ def probe_cross_engine(pages: list[OcrPage]) -> dict:
 
 
 def run_probes(
-    pages: list[OcrPage], chunks: list[Chunk], *, seed: int = 0
+    pages: list[OcrPage],
+    chunks: list[Chunk],
+    *,
+    seed: int = 0,
+    items: list[GoldenItem] | None = None,
+    profile: DomainProfile | None = None,
+    cfg: Config | None = None,
+    doc_id: str = "",
 ) -> dict:
-    """跑全部已接入的离线探针。"""
-    return {
-        "seed": seed,
-        "probes": {
-            "sentence_support": probe_sentence_support(chunks, seed=seed),
-            "cross_engine_spotcheck": probe_cross_engine(pages),
-        },
+    """跑全部已接入的离线探针。
+
+    `items`（金标题）给出时才跑定向污染实验——它需要"答案应当是什么"，
+    没有金标就只能做前两项。缺省行为保持不变，避免调用方被迫理解新参数。
+    """
+    probes: dict = {
+        "sentence_support": probe_sentence_support(chunks, seed=seed),
+        "cross_engine_spotcheck": probe_cross_engine(pages),
     }
+    if items:
+        probes["targeted_corruption"] = probe_targeted_corruption(
+            chunks, items, profile=profile, cfg=cfg, doc_id=doc_id
+        )
+    return {"seed": seed, "probes": probes}
 
 
 def _pct(value: float) -> str:
@@ -652,6 +663,10 @@ def render_markdown(report: dict) -> str:
         lines += [
             f"- `{e['sample']}`：{e['conflicts']} 处冲突" for e in spot["false_alarm_examples"]
         ]
+
+    corruption = report["probes"].get("targeted_corruption")
+    if corruption:
+        lines += [""] + render_section(corruption)
 
     lines += ["", "## 复现", "", "```powershell", "uv run docqa eval-probes", "```", ""]
     notes = report.get("notes") or []

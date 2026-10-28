@@ -7,7 +7,7 @@
 从一张没有文本层的扫描页，到一个带页码与条款号、能自检、也会明确拒答的答案。
 
 [![CI](https://github.com/JHf0912/scanned-pdf-qa-agent/actions/workflows/test.yml/badge.svg)](https://github.com/JHf0912/scanned-pdf-qa-agent/actions/workflows/test.yml)
-[![coverage](https://img.shields.io/badge/coverage-88.0%25-brightgreen)](#测试)
+[![coverage](https://img.shields.io/badge/coverage-88.3%25-brightgreen)](#测试)
 [![python](https://img.shields.io/badge/python-3.12-3776AB?logo=python&logoColor=white)](pyproject.toml)
 [![license](https://img.shields.io/badge/license-MIT-green)](LICENSE)
 [![PyMuPDF](https://img.shields.io/badge/dependency-PyMuPDF%20AGPL--3.0-orange)](docs/deployment.md)
@@ -32,7 +32,7 @@
 | **检索** | BM25 词元 + 字符二元组，RRF 融合，不依赖任何模型 |
 | **自检** | 引用有效性 / 数值落地 / 条号真实性，作为 **gate** |
 | **评估** | 三层指标（索引 → 检索 → 生成）+ 对抗变异 + 噪声扫描 |
-| **规模** | 376 个用例，覆盖率 88.0%；CI 含回归基线门禁 |
+| **规模** | 385 个用例，覆盖率 88.3%；CI 含回归基线门禁 |
 | **许可** | 自身 MIT；依赖 PyMuPDF 为 AGPL-3.0 |
 
 ## 目录
@@ -153,7 +153,9 @@ docker run --rm -p 8000:8000 --env-file .env \
 
 另一份不需要密钥的是
 [`artifacts/report/offline_probes.md`](artifacts/report/offline_probes.md)——用
-`uv run docqa eval-probes` 生成，把句级支撑度与跨引擎标记两项"未测量"变成数字。
+`uv run docqa eval-probes` 生成，把三项"未测量"变成数字：句级支撑度的精确率/召回率、
+跨引擎字段标记的精确率/召回率，以及**定向污染命中答案字段时的静默错答率**
+（合成件 6/6：答案照抄错值，数值落地等 gate 全部通过）。
 
 ### 跨文档检索
 
@@ -342,7 +344,7 @@ RRF 的分数是 `Σ w/(k+rank)`，k=60 时排名第 1 与第 20 只差约 27%�
 uv run pytest -q --cov=src/docqa --cov-report=term-missing
 ```
 
-**当前覆盖率 88.0%**（4290 条语句中 513 条未覆盖；376 个用例中 372 通过、4 个 live 用例跳过）。
+**当前覆盖率 88.3%**（4511 条语句中 528 条未覆盖；385 个用例中 381 通过、4 个 live 用例跳过）。
 默认用例全部 mock 外部依赖、**不读真实文档，也不读 `.env`**：
 `tests/conftest.py` 在收集用例之前清掉全部 `DOCQA_*` 环境变量，并置
 `DOCQA_DISABLE_DOTENV=1`，让 `load_config()` 不再自动读项目根的 `.env`。
@@ -418,11 +420,12 @@ uv run docqa eval --doc out/demo/<产物> --golden data/golden/demo_qa.jsonl `
 - **评估与工程**：对抗变异套件、三层评估与 Wilson 区间、**OCR 噪声扫描入口**、
   **提示注入扫描**、延迟 p50/p95、回归基线 + CI 门禁、
   **真实端点冒烟通道**（`pytest -m live --live`）、
-  **两项"未测量"的离线探针**（`docqa eval-probes`：句级支撑度与跨引擎标记的
-  精确率/召回率，数字与局限见 [docs/evaluation.md](docs/evaluation.md) 第六之三）；
+  **三项"未测量"的离线探针**（`docqa eval-probes`：句级支撑度、跨引擎标记、
+  **定向污染命中答案字段**的精确率/召回率与静默错答率，数字与局限见
+  [docs/evaluation.md](docs/evaluation.md) 第六之三、第六之四）；
 - **交付**：CLI + Web UI + 静态报告、双 provider + 无模型回退、
-  五个业务场景 profile、**容器镜像与部署文档**、88.0% 覆盖率
-  （`pytest --cov=src/docqa`，4290 行中 513 行未覆盖）、完整文档。
+  五个业务场景 profile、**容器镜像与部署文档**、88.3% 覆盖率
+  （`pytest --cov=src/docqa`，4511 行中 528 行未覆盖）、完整文档。
 
 合成件上跑通全链路：类型判定 → 识别 → 切分 → 检索 → 问答 → 自检 → 拒答 → 评估 → 报告。
 
@@ -525,14 +528,25 @@ Recall@10 100%、MRR 0.95、nDCG 0.963；真实文档的金标集还没标相关
 `--upscale` 开关与产物留痕已保留，但 A/B 实验脚本未写，
 所以"该不该开"这个问题目前**没有数据支撑**。
 
-#### 10. OCR 噪声鲁棒性有了入口，但结论仍然弱
+#### 10. OCR 噪声鲁棒性：随机噪声没有结论，定向污染已实测
 
 `docqa eval --noise-sweep 3` 会按固定种子注入形近字/数字混淆/丢字，
 报告里给出每一档的**实际 CER** 与准确率，并标明作答路径是抽取式（确定性）
 还是生成模型（有采样波动）。合成件上跑出来是 0 / 2.4% / 6.7% 实际 CER 三档，
 准确率都是 11/13（**没有下滑**）——但这**不能**解读成"抗噪"：
 2 页、16 个片段的语料里，注入的字符未必落在答案所依赖的那几个数字上。
-真正要回答"噪声到什么强度开始不可靠"，得在长文档、且注入命中答案字段的条件下跑。
+
+所以另做了**定向污染**实验（`uv run docqa eval-probes` 的第三个探针）：
+把每道题答案所依赖、且在语料中唯一的那个字段改掉（如 `12.5 → 22.5`、`IP54 → IP64`），
+再用抽取式 Agent 走完整链路。结果是 **6/6 静默错答**：答案照抄被污染的值、
+原值消失，而数值落地、引用有效、条号一致性**全部通过**（95% CI 61.0%–100%）；
+对照组（改同一题的非答案字段，6/6 真的进入答案）则 6/6 保持正确。
+这不是缺陷，是数值落地的设计边界——它校验**忠实度**，不校验**真相**。
+详见 [docs/evaluation.md](docs/evaluation.md#六之四定向污染命中答案字段时会发生什么已实测)。
+
+仍然未知的是**噪声强度曲线**：多强的随机噪声会让系统开始不可靠，需要在长文档、
+真实识别、并按字段命中率统计的条件下跑——本实验回答的是"命中答案字段会怎样"，
+不是"多强开始不可靠"。
 
 > 接这条链路时踩过一个错：每一档都自己 `build_llm_provider(cfg)`，
 > `--no-llm` 没传进去。它在**没配模型**的机器上看不出来（工厂会静默回退

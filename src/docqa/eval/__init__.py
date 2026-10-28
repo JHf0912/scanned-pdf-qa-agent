@@ -1,6 +1,7 @@
 """评估层：三层指标 + 对抗变异 + 噪声鲁棒性 + 回归基线。"""
 
 from .adversarial import generate_mutations, run_adversarial
+from .corruption import probe_targeted_corruption
 from .metrics import (
     cer,
     character_accuracy,
@@ -36,5 +37,6 @@ __all__ = [
     "save_baseline", "context_utilization", "EvalReport",
     "generate_mutations", "run_adversarial",
     "NoiseConfig", "inject_noise", "noise_sweep_levels", "DEFAULT_LEVELS",
-    "probe_sentence_support", "probe_cross_engine", "run_probes", "render_markdown",
+    "probe_sentence_support", "probe_cross_engine", "probe_targeted_corruption",
+    "run_probes", "render_markdown",
 ]
