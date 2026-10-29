@@ -10,6 +10,7 @@
     docqa ingest   <pdf>             全流程：判定→渲染→OCR→切分→索引
     docqa ask      "问题"            问答，返回答案+引用+自检
     docqa eval                       跑评估，产出报告
+    docqa eval-probes                离线探针：句级支撑度 / 跨引擎标记的精确率
     docqa serve                      起 Web UI
 """
 
@@ -59,8 +60,8 @@ def _main_callback(
     """扫描版 PDF 智能文档问答 Agent。"""
 
 
-def _cfg(require_ocr: bool = False) -> Config:
-    cfg = load_config(require_ocr=require_ocr)
+def _cfg(require_ocr: bool = False, *, read_dotenv: bool = True) -> Config:
+    cfg = load_config(require_ocr=require_ocr, read_dotenv=read_dotenv)
     setup_logging(cfg.log_level, json_output=False)
     return cfg
 
@@ -947,6 +948,140 @@ def eval_cmd(
         save_baseline_fn(rep, save_baseline)
         console.print(f"[green]基线已写入[/green] {save_baseline}"
                       f"（引擎 {rep.engine}，可直接用于 --baseline）")
+
+
+# ---------------------------------------------------------------- eval-probes
+
+@app.command("eval-probes")
+def eval_probes(
+    doc: Path | None = typer.Option(
+        None, "--doc",
+        help="已 ingest 的产物目录；不给则用合成件现场跑一次 fixture ingest（离线）。",
+    ),
+    pdf: Path = typer.Option(
+        PROJECT_ROOT / "artifacts" / "demo" / "demo_scan.pdf", "--pdf",
+        help="合成件 PDF（仅在未给 --doc 时使用）。",
+    ),
+    fixtures_dir: Path = typer.Option(
+        PROJECT_ROOT / "artifacts" / "demo" / "ocr", "--fixtures-dir",
+        help="fixture 引擎的识别结果目录（仅在未给 --doc 时使用）。",
+    ),
+    domain: str = typer.Option("standard", "--domain", "-d"),
+    out_root: Path = typer.Option(
+        PROJECT_ROOT / "out" / "probes", "--out-root",
+        help="未给 --doc 时，现场 ingest 的产物写到这里。",
+    ),
+    report: Path = typer.Option(
+        PROJECT_ROOT / "artifacts" / "report" / "offline_probes.md", "--report",
+        help="Markdown 报告路径。",
+    ),
+    json_out: Path = typer.Option(
+        PROJECT_ROOT / "artifacts" / "report" / "offline_probes.json", "--json-out",
+        help="JSON 结果路径。",
+    ),
+    golden: Path = typer.Option(
+        PROJECT_ROOT / "data" / "golden" / "demo_qa.jsonl", "--golden",
+        help="金标集：提供时才跑「定向污染」探针（它需要知道答案字段是什么）。",
+    ),
+    seed: int = typer.Option(0, "--seed", help="抽样种子；固定它才能复现。"),
+) -> None:
+    """在合成件上离线跑评估探针：不调用模型、不触网。
+
+    这里测量的是 `docs/evaluation.md` 里此前写着"未知"的几项：
+
+    - **句级支撑度**若升格为 gate，精确率/召回率是多少；
+    - **跨引擎一致性校验**标出的可疑字段里，有多少是真的错；
+    - **噪声命中答案字段**时，系统会不会照抄错值并让全部 gate 通过。
+
+    输入可以是已落盘的产物（`--doc`），也可以是仓库自带的合成件（默认现场
+    fixture ingest）。**不读 `.env`、不建模型 provider**——这三项都能纯本地测。
+    """
+    from .errors import InputError
+    from .eval.probes import render_markdown, run_probes
+    from .eval.runner import load_golden
+    from .ocr.fixture import FixtureOcrEngine
+    from .pipeline import ingest, load_result
+
+    cfg = _cfg(read_dotenv=False)
+    profile = load_domain(domain, cfg)  # 场景名非法时尽早报错，而不是跑到一半
+    items = load_golden(golden) if golden.exists() else None
+    if items is None:
+        console.print(
+            f"[yellow]金标集不存在，跳过定向污染探针：{golden}[/yellow]"
+        )
+
+    if doc is not None:
+        try:
+            result = load_result(doc, cfg, domain)
+        except (OSError, KeyError, ValueError) as exc:
+            _fail(InputError(f"读取产物失败：{doc}\n{exc}"))
+    else:
+        if not pdf.exists():
+            _fail(InputError(f"合成件 PDF 不存在：{pdf}"))
+        if not fixtures_dir.exists():
+            _fail(InputError(f"fixture 识别结果目录不存在：{fixtures_dir}"))
+        console.print(f"用合成件现场跑 fixture ingest：{pdf.name}")
+        result = ingest(
+            pdf, cfg=cfg, domain=domain,
+            engine=FixtureOcrEngine(fixtures_dir), out_root=out_root,
+        )
+
+    payload = run_probes(
+        result.pages, result.chunks, seed=seed,
+        items=items, profile=profile, cfg=cfg, doc_id=result.doc_id,
+    )
+    engine_name = str(result.manifest.get("ocr", {}).get("engine") or "unknown")
+    payload["metadata"] = {
+        "doc_id": result.doc_id,
+        "engine": engine_name,
+        "domain": domain,
+        "source": "fixture ingest" if doc is None else str(doc),
+    }
+    payload["notes"] = [
+        "输入是仓库自带的合成件（或由它产生的产物）；识别结果是**构造的**，"
+        "所以本报告衡量评估机制本身，**不得据此声明 OCR 精度**。",
+        "探针都不调用模型、不触网；固定 --seed 后结果可逐字节复现。"
+        "定向污染探针走的是抽取式路径（NullProvider），与 `docqa eval --no-llm` 同一条链路。",
+    ]
+
+    report.parent.mkdir(parents=True, exist_ok=True)
+    report.write_text(render_markdown(payload), encoding="utf-8")
+    json_out.parent.mkdir(parents=True, exist_ok=True)
+    json_out.write_text(
+        json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8"
+    )
+
+    table = Table(title="离线探针（合成件 / fixture）", show_header=True, header_style="bold")
+    table.add_column("探针")
+    table.add_column("n", justify="right")
+    table.add_column("精确率", justify="right")
+    table.add_column("召回率", justify="right")
+    support = payload["probes"]["sentence_support"]
+    spot = payload["probes"]["cross_engine_spotcheck"]
+    table.add_row(
+        "句级支撑度（升格为 gate 时）",
+        str(support["n"]),
+        f"{support['confusion']['precision']:.1%}",
+        f"{support['confusion']['recall']:.1%}",
+    )
+    table.add_row(
+        "跨引擎校验（字段注入）",
+        str(spot["n"]),
+        f"{spot['confusion']['precision']:.1%}",
+        f"{spot['confusion']['recall']:.1%}",
+    )
+    corruption = payload["probes"].get("targeted_corruption")
+    if corruption:
+        silent = corruption["silent_wrong"]
+        table.add_row(
+            "定向污染（命中答案字段→静默错误）",
+            str(corruption["n_treatment"]),
+            f"{silent['rate']:.1%}",
+            "—",
+        )
+    console.print(table)
+    console.print(f"\nMarkdown 报告：{report}")
+    console.print(f"JSON 结果：{json_out}")
 
 
 # ---------------------------------------------------------------- serve

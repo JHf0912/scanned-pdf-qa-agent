@@ -30,10 +30,52 @@ from pathlib import Path
 
 import pytest
 
-from docqa.config import DomainProfile, load_config, load_domain
+from docqa.config import DOTENV_DISABLE_ENV, DomainProfile, load_config, load_domain
 from docqa.models import Chunk, Citation, OcrBlock, OcrPage, Usage
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
+
+
+# ---------------------------------------------------------------- 默认通道离线化
+#
+# 默认测试必须**不读开发机上的 `.env`**。
+#
+# 为什么要在 `pytest_configure` 里做，而不是用一个 autouse fixture
+# --------------------------------------------------------------
+# fixture 只有在该用例执行时才生效，而 `cfg` 这类 session 级夹具可能在
+# 它们之前被求值；更要命的是 `load_dotenv()` 一旦跑过，值就留在 `os.environ`
+# 里，之后即使删掉环境变量也清不干净。configure 阶段在**收集与执行任何用例
+# 之前**执行，是唯一能保证"没有任何用例见过 .env"的位置。
+#
+# 这个问题不是理论风险：本机 `.env` 同时配了 OCR 与生成端点，于是
+# `test_eval_runs_end_to_end` 等几个没传 `--no-llm` 的用例会真的打端点——
+# 花钱、慢，而且答案由模型采样产生，同一条断言可能今天过明天不过。
+#
+# `--live` 通道反过来：它就是用来打真实端点的，所以不加限制。
+_ENV_SNAPSHOT: dict[str, str] = {}
+
+
+def pytest_configure(config) -> None:
+    """默认通道：清掉 DOCQA_* 环境变量，并禁止 `load_config()` 自动读 .env。"""
+    if config.getoption("--live"):
+        return
+    _ENV_SNAPSHOT.update(
+        {k: v for k, v in os.environ.items() if k.startswith("DOCQA_")}
+    )
+    for key in list(os.environ):
+        if key.startswith("DOCQA_") and key != DOTENV_DISABLE_ENV:
+            del os.environ[key]
+    os.environ[DOTENV_DISABLE_ENV] = "1"
+
+
+def pytest_unconfigure(config) -> None:
+    """把 configure 阶段清掉的环境变量放回去（便于同进程再次调用 pytest）。"""
+    if not _ENV_SNAPSHOT:
+        return
+    for key in [k for k in os.environ if k.startswith("DOCQA_")]:
+        del os.environ[key]
+    os.environ.update(_ENV_SNAPSHOT)
+    _ENV_SNAPSHOT.clear()
 
 
 # ---------------------------------------------------------------- live 通道
