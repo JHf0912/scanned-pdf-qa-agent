@@ -207,6 +207,26 @@ def _blocks_to_sections(
             current_blocks.append(block.block_id)
             continue
 
+        # —— 分页断开 ——
+        # 一个 section 不跨页。跨页有两个真实后果：
+        #   1. 引用与页图 bbox 会指向"section 起始页"，而内容实际在后面的页上；
+        #   2. 若一个小节（如前言）一直没有自己的条号，它的正文会被并进**上一页**
+        #      的 section——实测 GB/T 1568 的前言整页没有一个 chunk，
+        #      "历次版本 1979/1997"因此检索不到、被误拒。
+        # 处理：遇到新页先冲刷，并**沿用当前条号/标题**，使跨页的同一 clause
+        # 仍可被 `[p.N §x]` 引用（只是拆成两条、各自定位到自己的页）。
+        if (
+            current_page is not None
+            and block.page_no != current_page
+            and (current_parts or current_label)
+        ):
+            carry_label, carry_title = current_label, current_title
+            flush()
+            current_label, current_title = carry_label, carry_title
+            current_page = block.page_no
+            current_parts = []
+            current_blocks = []
+
         if block.type == "heading" and not current_parts:
             current_title = block.text.strip()
             current_page = block.page_no
