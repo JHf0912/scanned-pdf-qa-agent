@@ -11,6 +11,10 @@ data/raw/
 data/derived/
 out/
 
+# 前端源码依赖（构建产物已在 src/docqa/web，由 COPY src 带入镜像）
+web/node_modules/
+web/.vite/
+
 # 本地工具与临时目录
 .tmprun/
 .tools/

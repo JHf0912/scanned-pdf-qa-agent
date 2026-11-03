@@ -26,6 +26,7 @@ dependencies = [
     "rank-bm25>=0.2.2",       # 纯 Python BM25，无需模型
     "fastapi>=0.141.0",       # Web UI
     "uvicorn>=0.52.0",
+    "python-docx>=1.2.0",     # DOCX 正文解析；MIT，不引入 AGPL 依赖
 ]
 
 [project.optional-dependencies]

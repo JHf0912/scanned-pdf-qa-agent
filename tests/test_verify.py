@@ -7,7 +7,14 @@
 from __future__ import annotations
 
 from docqa.models import CheckSeverity, Citation
-from docqa.qa.verify import cn_to_arabic, extract_claims, normalize, verify
+from docqa.qa.verify import (
+    check_citation_validity,
+    check_clause_consistency,
+    cn_to_arabic,
+    extract_claims,
+    normalize,
+    verify,
+)
 
 KNOWN = {"c1", "c2"}
 RETRIEVED = {"c1"}
@@ -272,4 +279,47 @@ class TestFabricatedClauseCitation:
                    known_ids={"c1"}, evidence_by_chunk=self.EV)
         chk = next(c for c in r.checks if c.name == "citation_validity")
         assert chk.passed  # 没有条号集合时只能退化为原行为
+
+
+class TestDocxClauseChecks:
+    """DOCX 引用形态 `[§3.6 ¶4]` 走同一套条号校验。
+
+    **回归**：`_CITATION_MARK_RE` 原先只认 `[p....]`，于是 `[§3.6 ¶4]`
+    里的 3.6/4 会进入数值断言与条号候选——`numeric_grounding` 假失败、
+    `clause_consistency` 噪声。这里把两种检查的 DOCX 行为都钉住。
+    """
+
+    def _cite(self, label: str | None = "3.6", section: str | None = "3.6") -> Citation:
+        return Citation(
+            page_no=None, clause_label=label, chunk_id="c1", quote="",
+            para_no=4, locator_kind="paragraph", section=section,
+        )
+
+    def test_docx_mark_does_not_leak_locator_numbers(self):
+        claims = extract_claims("斜度公差按 AT8 级选取。[§3.6 ¶4] [¶5] [§3.6]")
+        assert claims.clause_refs == []
+        assert not any(tok in {"3.6", "4", "5"} for tok in claims.numbers)
+
+    def test_docx_fabricated_section_fails_citation_validity(self):
+        chk = check_citation_validity([self._cite("9.9", "9.9")], {"c1"}, {"c1"}, {"3.6"})
+        assert not chk.passed
+        assert any("9.9" in o for o in chk.offenders)
+
+    def test_docx_real_section_passes_citation_validity(self):
+        chk = check_citation_validity([self._cite()], {"c1"}, {"c1"}, {"3.6"})
+        assert chk.passed, chk.detail
+
+    def test_docx_clause_mismatch_is_caught(self):
+        chk = check_clause_consistency(
+            "斜度公差按 AT8 级选取。[§3.6 ¶4] 另见 3.9 条。",
+            [self._cite()], {"3.6", "3.9"},
+        )
+        assert not chk.passed
+        assert any("3.9" in o for o in chk.offenders)
+
+    def test_docx_matching_clause_passes(self):
+        chk = check_clause_consistency(
+            "斜度公差按 AT8 级选取。[§3.6 ¶4]", [self._cite()], {"3.6"}
+        )
+        assert chk.passed, chk.detail
 

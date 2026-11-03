@@ -5,11 +5,12 @@
 一个只会 `run` 的黑盒，出了问题只能靠猜。
 
     docqa doctor                     环境自检（含**实测**端点是否真支持图像输入）
-    docqa detect   <pdf>             判断 PDF 类型，输出证据
-    docqa render   <pdf>             只看渲染结果
-    docqa ingest   <pdf>             全流程：判定→渲染→OCR→切分→索引
+    docqa detect   <pdf>             判断 PDF 类型，输出证据（DOCX 直接早退）
+    docqa render   <pdf>             只看渲染结果（DOCX 没有页图，明确拒绝）
+    docqa ingest   <pdf|docx>        全流程：判定→渲染→OCR→切分→索引
     docqa ask      "问题"            问答，返回答案+引用+自检
     docqa eval                       跑评估，产出报告
+    docqa eval-docx <docx>           DOCX 结构评估：段落覆盖 / 引用回环 / 表格保留
     docqa eval-probes                离线探针：句级支撑度 / 跨引擎标记的精确率
     docqa serve                      起 Web UI
 """
@@ -17,6 +18,7 @@
 from __future__ import annotations
 
 import json
+import re
 import sys
 from pathlib import Path
 
@@ -28,10 +30,16 @@ from rich.text import Text
 
 from .config import PROJECT_ROOT, Config, load_config, load_domain, missing_ocr_message
 from .detect import pages_needing_ocr, profile_pdf
-from .errors import EXIT_REGRESSION, DocqaError
+from .errors import (
+    EXIT_REGRESSION,
+    EXIT_VERIFICATION,
+    ConfigError,
+    DocqaError,
+    InputError,
+)
 from .logging import get_logger
 from .logging import setup as setup_logging
-from .models import AnswerBundle
+from .models import AnswerBundle, sanitize_display_text
 
 app = typer.Typer(
     add_completion=False,
@@ -116,6 +124,14 @@ def doctor(
         t.add_row("PyMuPDF", "[green]可用[/green]", f"v{pymupdf.__doc__ or ''}".strip()[:40])
     except ImportError as exc:
         t.add_row("PyMuPDF", "[red]缺失[/red]", str(exc))
+
+    # DOCX 是原生文本：它不经过 detect / render / OCR，所以**不需要**上面这些
+    # 端点配置。这一行存在的意义是：一台没配 OCR 的机器上，看到"缺少 OCR 端点"
+    # 之后不会误以为连 DOCX 也用不了。
+    t.add_row(
+        "DOCX 原生文本", "[green]无需 OCR[/green]",
+        "DOCX 原生文本不需要 OCR；docqa ingest x.docx 不受此影响",
+    )
 
     # --- 端点配置 ---
     t.add_row("OCR 端点", "[green]已配置[/green]" if cfg.has_ocr else "[red]未配置[/red]",
@@ -286,10 +302,34 @@ def _probe_with_image(tmp, cfg: Config) -> tuple[bool, str]:
 
 @app.command()
 def detect(
-    pdf: Path = typer.Argument(..., exists=True, help="待判定的 PDF"),
+    pdf: Path = typer.Argument(..., exists=True, help="待判定的 PDF（DOCX 会直接早退）"),
     out: Path | None = typer.Option(None, "--out", help="把判定结果写到 JSON"),
 ) -> None:
-    """判断 PDF 类型，并输出**判定依据**。"""
+    """判断 PDF 类型，并输出**判定依据**。DOCX 没有类型可判。"""
+    from .pipeline import source_type_of
+
+    try:
+        source_type = source_type_of(pdf)
+    except DocqaError as exc:
+        _fail(exc)
+        return
+
+    if source_type == "docx":
+        # 判定的是"这一页有没有文本层"。DOCX 天生就是文本，这一步不存在；
+        # 硬跑一遍 `profile_pdf()` 只会得到一句第三方库的解析错误。
+        console.print(Panel(
+            f"[green]DOCX 原生文本，无需类型判定。[/green]\n"
+            f"\n"
+            f"DOCX 不是扫描件：正文直接可读，不需要渲染与 OCR，也就没有\n"
+            f"TEXT / SCANNED / HYBRID 之分。下一步直接运行：\n"
+            f"\n"
+            f"    docqa ingest {pdf.name}\n"
+            f"\n"
+            f"（本命令的 --out 对 DOCX 无意义，未写入任何文件。）",
+            title=pdf.name, border_style="green",
+        ))
+        return
+
     profile = profile_pdf(pdf)
 
     color = {"SCANNED": "yellow", "TEXT": "green", "HYBRID": "cyan"}[profile.kind]
@@ -344,7 +384,26 @@ def render(
     注意：`--upscale` 只是**插值放大**，不会恢复任何精度。
     它的用途是做 A/B 实验，看更高的输入分辨率是否改善了 VLM 的辨识率。
     """
+    from .pipeline import source_type_of
     from .render import describe, render_pages
+
+    try:
+        source_type = source_type_of(pdf)
+    except DocqaError as exc:
+        _fail(exc)
+        return
+    if source_type == "docx":
+        # 明确拒绝，而不是让 PyMuPDF 抛一句 "cannot open document"——
+        # 用户会以为文件坏了，实际是"DOCX 根本没有页图"。
+        _fail(InputError(
+            "render 只适用于 PDF。\n"
+            "\n"
+            "DOCX 是原生文本，没有页图需要渲染（渲染它要先排版，而排版结果\n"
+            "取决于 Word 版本与纸张设置，无法复现）。请直接运行：\n"
+            "\n"
+            f"    docqa ingest {pdf.name}"
+        ))
+        return
 
     cfg = _cfg()
     cfg.render.dpi = dpi
@@ -367,23 +426,42 @@ def render(
 def ingest(
     pdf: Path = typer.Argument(..., exists=True),
     domain: str = typer.Option("standard", "--domain", "-d", help="业务场景 profile"),
-    engine: str = typer.Option("vlm", "--engine", help="vlm / fixture / local"),
+    engine: str = typer.Option("vlm", "--engine", help="vlm / fixture / local（DOCX 不适用）"),
     fixtures_dir: Path | None = typer.Option(None, "--fixtures-dir"),
     out: Path | None = typer.Option(None, "--out", help="产物目录"),
-    force: bool = typer.Option(False, "--force", help="忽略缓存重新识别"),
+    force: bool = typer.Option(False, "--force", help="忽略缓存重新识别（仅 PDF）"),
 ) -> None:
-    """全流程：类型判定 → 渲染 → OCR → 切分 → 索引。"""
+    """全流程：PDF → 判定/渲染/OCR；DOCX → 原生文本解析；随后切分 → 索引。"""
     from .ocr import build_engine
     from .pipeline import ingest as run_ingest
+    from .pipeline import source_type_of
 
-    cfg = _cfg(require_ocr=(engine == "vlm"))
-    if force:
+    # 先判来源，再决定要不要 OCR 配置。
+    # 顺序必须如此：`_cfg(require_ocr=True)` 在 DOCX 上会直接失败，
+    # 而 DOCX 恰恰是"没有视觉模型也能解析"的那一类。
+    try:
+        source_type = source_type_of(pdf)
+    except DocqaError as exc:
+        _fail(exc)
+        return
+
+    is_docx = source_type == "docx"
+    cfg = _cfg(require_ocr=(not is_docx and engine == "vlm"))
+    if is_docx:
+        if engine != "vlm":
+            console.print(
+                "[yellow]--engine 对 DOCX 不适用，已忽略"
+                "（DOCX 是原生文本，不经过 OCR）。[/yellow]"
+            )
+        if force:
+            console.print("[dim]DOCX 没有 OCR 缓存可清，--force 已忽略。[/dim]")
+    elif force:
         import shutil
 
         shutil.rmtree(cfg.cache_dir, ignore_errors=True)
         console.print("[yellow]已清空 OCR 缓存，将重新识别[/yellow]")
 
-    if engine == "fixture":
+    if engine == "fixture" and not is_docx:
         console.print(Panel(
             "[yellow]正在使用 fixture 引擎。[/yellow]\n"
             "它读取的是预置结果，**不是真实的模型识别**。\n"
@@ -393,36 +471,38 @@ def ingest(
         ))
 
     try:
-        ocr_engine = build_engine(engine, cfg, fixtures_dir=fixtures_dir) if engine != "vlm" \
-            else build_engine("vlm", cfg)
-
-        # 第二引擎：配了就跑跨引擎一致性校验。
-        #
-        # **有一个陷阱必须挡住**：如果第二引擎用的是同一个模型，
-        # 两次识别会高度一致，比对必然"通过"——那是个**永远不会失败的检查**，
-        # 比不做检查更糟，因为它会让人以为这一路已经有保障了。
-        # 这里检测到同模型就拒绝启用，而不是让它静静地空转。
+        ocr_engine = None
         ocr_engine2 = None
-        if cfg.has_ocr2:
-            same_model = (cfg.ocr2.model or "") == (cfg.ocr.model or "")
-            same_endpoint = (cfg.ocr2.base_url or "") == (cfg.ocr.base_url or "")
-            if same_model and same_endpoint:
-                console.print(Panel(
-                    "[yellow]第二 OCR 引擎与主引擎是同一个模型、同一个端点，"
-                    "跨引擎校验已跳过。[/yellow]\n"
-                    "同一模型对同一页图会给出高度一致的输出，比对必然通过——\n"
-                    "那是**一个永远不会失败的检查**，比不做更危险，"
-                    "因为它会让人误以为这一路已有保障。\n"
-                    "请把 DOCQA_OCR2_MODEL / DOCQA_OCR2_BASE_URL 指向**另一个模型**，"
-                    "或删掉 DOCQA_OCR2_* 明确表示不做该校验。",
-                    title="跨引擎校验未启用", border_style="yellow",
-                ))
-            else:
-                ocr_engine2 = build_engine("vlm", cfg, provider_cfg=cfg.ocr2)
-                console.print(
-                    f"跨引擎校验：[green]已启用[/green]"
-                    f"（{cfg.ocr.model} ↔ {cfg.ocr2.model}，每页再识别一次，成本翻倍）"
-                )
+        if not is_docx:
+            ocr_engine = build_engine(engine, cfg, fixtures_dir=fixtures_dir) if engine != "vlm" \
+                else build_engine("vlm", cfg)
+
+            # 第二引擎：配了就跑跨引擎一致性校验。
+            #
+            # **有一个陷阱必须挡住**：如果第二引擎用的是同一个模型，
+            # 两次识别会高度一致，比对必然"通过"——那是个**永远不会失败的检查**，
+            # 比不做检查更糟，因为它会让人以为这一路已经有保障了。
+            # 这里检测到同模型就拒绝启用，而不是让它静静地空转。
+            if cfg.has_ocr2:
+                same_model = (cfg.ocr2.model or "") == (cfg.ocr.model or "")
+                same_endpoint = (cfg.ocr2.base_url or "") == (cfg.ocr.base_url or "")
+                if same_model and same_endpoint:
+                    console.print(Panel(
+                        "[yellow]第二 OCR 引擎与主引擎是同一个模型、同一个端点，"
+                        "跨引擎校验已跳过。[/yellow]\n"
+                        "同一模型对同一页图会给出高度一致的输出，比对必然通过——\n"
+                        "那是**一个永远不会失败的检查**，比不做更危险，"
+                        "因为它会让人误以为这一路已有保障。\n"
+                        "请把 DOCQA_OCR2_MODEL / DOCQA_OCR2_BASE_URL 指向**另一个模型**，"
+                        "或删掉 DOCQA_OCR2_* 明确表示不做该校验。",
+                        title="跨引擎校验未启用", border_style="yellow",
+                    ))
+                else:
+                    ocr_engine2 = build_engine("vlm", cfg, provider_cfg=cfg.ocr2)
+                    console.print(
+                        f"跨引擎校验：[green]已启用[/green]"
+                        f"（{cfg.ocr.model} ↔ {cfg.ocr2.model}，每页再识别一次，成本翻倍）"
+                    )
 
         result = run_ingest(
             pdf, cfg=cfg, domain=domain,
@@ -433,17 +513,31 @@ def ingest(
         return
 
     m = result.manifest
-    console.print(Panel(
-        f"文档：{result.doc_id}\n"
-        f"类型：{result.profile.kind}   页数：{result.profile.page_count}   "
-        f"识别失败：{len(result.failed_pages)} 页\n"
-        f"片段：{m['chunk']['chunks']}（表格 {m['chunk']['tables']}）   "
-        f"引用模式：{m['chunk']['citation_mode']}\n"
-        f"耗时：{m['elapsed_s']}s   token：{m['usage_total']['tokens_in']}+"
-        f"{m['usage_total']['tokens_out']}   估算成本：${m['usage_total']['est_cost_usd']}\n"
-        f"产物目录：{result.out_dir}",
-        title="ingest 完成", border_style="green",
-    ))
+    if result.profile.source_type == "docx":
+        # DOCX 没有页：显示"页数：0"会让人以为解析失败了。
+        # 改报正文块数与表格数——这才是 DOCX 的结构规模。
+        console.print(Panel(
+            f"文档：{result.doc_id}\n"
+            f"类型：DOCX 原生文本   正文块：{result.profile.unit_count}   "
+            f"片段：{m['chunk']['chunks']}   "
+            f"表格：{m['chunk']['tables']}（已线性化）\n"
+            f"引用模式：{m['chunk'].get('citation_mode', 'paragraph')}\n"
+            f"耗时：{m['elapsed_s']}s   token：0+0   估算成本：$0.0\n"
+            f"产物目录：{result.out_dir}",
+            title="ingest 完成", border_style="green",
+        ))
+    else:
+        console.print(Panel(
+            f"文档：{result.doc_id}\n"
+            f"类型：{result.profile.kind}   页数：{result.profile.page_count}   "
+            f"识别失败：{len(result.failed_pages)} 页\n"
+            f"片段：{m['chunk']['chunks']}（表格 {m['chunk']['tables']}）   "
+            f"引用模式：{m['chunk']['citation_mode']}\n"
+            f"耗时：{m['elapsed_s']}s   token：{m['usage_total']['tokens_in']}+"
+            f"{m['usage_total']['tokens_out']}   估算成本：${m['usage_total']['est_cost_usd']}\n"
+            f"产物目录：{result.out_dir}",
+            title="ingest 完成", border_style="green",
+        ))
     if m["chunk"]["used_sentence_fallback"]:
         console.print(
             "[yellow]注意：未识别到条款结构，已退回句子窗口切分，"
@@ -454,12 +548,53 @@ def ingest(
 
 # ---------------------------------------------------------------- ask
 
+# 展示层控制字符净化：C0/C1 的单一实现在 `models.sanitize_display_text()`；
+# bidi 控制字符（U+202A–202E、U+2066–2069）models 尚未覆盖，终端这层先补上。
+_BIDI_CONTROL_RE = re.compile(r"[‪-‮⁦-⁩]")
+
+
+def _sanitize_outlet(text: str | None) -> str | None:
+    """CLI 展示前的统一净化：C0/C1（models）+ bidi 控制字符（本地补充）。"""
+    cleaned = sanitize_display_text(text)
+    if cleaned is None:
+        return None
+    return _BIDI_CONTROL_RE.sub("", cleaned)
+
+
+def _sanitize_bundle_dict(data: dict) -> dict:
+    """`--json` 输出前的净化：只处理会直接展示的文本字段。
+
+    - `answer`/`refusal_detail`/`model_knowledge`、`citations[*].quote`；
+    - `citations[*].rendered`/`clause_label`、`candidates[*].citation`：
+      引用字符串由 `clause_label` 渲染而来，后者来自文档；
+    - 自检的 `detail`/`offenders` 会引用答案或证据原句。
+    """
+    for field in ("answer", "refusal_detail", "model_knowledge"):
+        data[field] = _sanitize_outlet(data.get(field))
+    for citation in data.get("citations") or []:
+        for field in ("quote", "clause_label", "rendered"):
+            citation[field] = _sanitize_outlet(citation.get(field))
+    for candidate in data.get("candidates") or []:
+        candidate["citation"] = _sanitize_outlet(candidate.get("citation"))
+    for check in (data.get("verification") or {}).get("checks") or []:
+        check["detail"] = _sanitize_outlet(check.get("detail"))
+        check["offenders"] = [
+            _sanitize_outlet(item) for item in check.get("offenders") or []
+        ]
+    return data
+
+
 def _print_bundle(bundle: AnswerBundle) -> None:
     """统一的答案呈现。CLI 与 Web 用同一份 AnswerBundle，保证两者一致。"""
+    # 模式来自**生成这条答案时**的 bundle，而不是当前开关：切换只影响下一问。
+    mode_label = "含模型知识" if bundle.answer_mode == "hybrid" else "仅文档"
+    console.print(f"[bold]模式：[/bold]{mode_label}")
+
     if bundle.refused:
         reason = bundle.refusal_reason.value if bundle.refusal_reason else "unknown"
+        refusal_detail = _sanitize_outlet(bundle.refusal_detail or "")
         console.print(Panel(
-            f"[yellow]按策略拒答[/yellow]（{reason}）\n\n{bundle.refusal_detail or ''}",
+            f"[yellow]按策略拒答[/yellow]（{reason}）\n\n{refusal_detail}",
             title="无法作答", border_style="yellow",
         ))
         if bundle.candidates:
@@ -469,12 +604,24 @@ def _print_bundle(bundle: AnswerBundle) -> None:
             t.add_column("取值")
             t.add_column("出处")
             for i, c in enumerate(bundle.candidates, start=1):
-                t.add_row(str(i), Text(c.interpretation), Text(c.value),
-                          Text(c.citation.render(bundle.citation_template)))
+                # 候选解释/取值来自模型；引用串由 clause_label 渲染而来，
+                # 两者都可能夹带控制字符，进终端前统一净化。
+                t.add_row(
+                    str(i),
+                    Text(str(_sanitize_outlet(c.interpretation) or "")),
+                    Text(str(_sanitize_outlet(c.value) or "")),
+                    Text(str(_sanitize_outlet(
+                        c.citation.render(bundle.citation_template,
+                                          bundle.docx_citation_template)) or "")),
+                )
             console.print(t)
     else:
-        # 无模型降级时 answer 就是 OCR 出来的**文档原文**，同样不能过 markup 解析
-        console.print(Panel(Text(bundle.answer or ""), title="答案", border_style="green"))
+        # 无模型降级时 answer 就是 OCR 出来的**文档原文**，同样不能过 markup 解析。
+        # hybrid 可能"正文为空、补充段非空"——那是有效结果，不是错误态。
+        answer_text = str(_sanitize_outlet((bundle.answer or "").strip()) or "")
+        if not answer_text and bundle.model_knowledge:
+            answer_text = "文档中未找到可引用的依据。"
+        console.print(Panel(Text(answer_text), title="答案", border_style="green"))
 
     if bundle.citations:
         t = Table(title="引用来源", show_header=True, header_style="bold")
@@ -482,9 +629,23 @@ def _print_bundle(bundle: AnswerBundle) -> None:
         t.add_column("chunk")
         t.add_column("证据片段", overflow="fold")
         for c in bundle.citations:
-            t.add_row(Text(c.render(bundle.citation_template)),
-                      Text(c.chunk_id), Text(c.quote[:120]))
+            # 两套模板都传：同一次回答里 PDF 与 DOCX 的引用格式不同，
+            # 只传 PDF 模板会让 DOCX 的自定义模板被静默忽略。
+            # quote 是文档原文、rendered 由 clause_label 渲染而来，两者都要净化。
+            quote = str(_sanitize_outlet(c.quote) or "")[:120]
+            rendered = str(_sanitize_outlet(
+                c.render(bundle.citation_template,
+                         bundle.docx_citation_template)) or "")
+            t.add_row(Text(rendered), Text(c.chunk_id), Text(quote))
         console.print(t)
+
+    if bundle.model_knowledge:
+        # 补充段**不是证据**：独立面板、不加任何引用、不进入 citations。
+        # 它与带引用的正文在视觉上必须分开，否则读者会把模型知识当成文档原文。
+        console.print(Panel(
+            Text(str(_sanitize_outlet(bundle.model_knowledge) or "")),
+            title="模型知识补充", border_style="cyan",
+        ))
 
     v = bundle.verification
     t = Table(title="自检结论", show_header=True, header_style="bold")
@@ -495,7 +656,7 @@ def _print_bundle(bundle: AnswerBundle) -> None:
     for c in v.checks:
         t.add_row(Text(c.name), Text(c.severity.value),
                   "[green]通过[/green]" if c.passed else "[red]未通过[/red]",
-                  Text(c.detail))
+                  Text(str(_sanitize_outlet(c.detail) or "")))
     console.print(t)
     console.print(f"句级支撑度（咨询性，不作放行判定）：{v.support_score:.2f}")
 
@@ -514,16 +675,38 @@ def ask(
         help="ingest 产物目录。可重复传入多份做**跨文档检索**"
              "（如 --doc A --doc B）；引用里会带 doc_id 区分来源。",
     ),
-    pdf: Path | None = typer.Option(None, "--pdf", help="或直接给 PDF（需先 ingest）"),
+    pdf: Path | None = typer.Option(None, "--pdf", help="或直接给 PDF / DOCX（需先 ingest）"),
     domain: str = typer.Option("standard", "--domain", "-d"),
+    mode: str = typer.Option(
+        "strict", "--mode",
+        help="strict（仅文档，默认）/ hybrid（文档 + 模型知识；需配置生成模型）",
+    ),
     show_json: bool = typer.Option(False, "--json", help="输出结构化 JSON"),
 ) -> None:
-    """提问，返回答案 + 引用 + 自检结论。"""
+    """提问，返回答案 + 引用 + 自检结论。
+
+    `--mode hybrid` 会把"文档没有的内容"单独放进「模型知识补充」面板，
+    并明确标注它不是文档证据；它需要生成模型，没有配置时直接报配置错误，
+    **不会静默退回 strict**。
+    """
     from .llm import build_llm_provider
     from .pipeline import load_results
     from .qa import QaAgent
+    from .qa.answer import HYBRID_REQUIRES_LLM_MESSAGE, validate_answer_mode
+
+    # 模式在入口就校验：非法值绝不能落到某个默认分支（那会让用户以为
+    # 自己用的是 hybrid，实际拿到的是 strict 的答案与字段）。
+    try:
+        validate_answer_mode(mode)
+    except ValueError as exc:
+        _fail(ConfigError(str(exc)))
+        return
 
     cfg = _cfg()
+    if mode == "hybrid" and not cfg.has_llm:
+        # 显式配置错误（退出码 2），不静默降级。
+        _fail(ConfigError(HYBRID_REQUIRES_LLM_MESSAGE))
+        return
     # 先校验场景名，再找产物。反过来的话，一个拼错的 --domain 会先报
     # "找不到已 ingest 的产物"，把人引去跑 ingest —— 而 ingest 同样会因为这个
     # 拼错的场景名失败。**先报那个真正的原因。**
@@ -552,13 +735,15 @@ def ask(
         failed_pages=result.failed_pages,
         doc_id=result.doc_id,
     )
-    bundle = agent.answer(question)
+    bundle = agent.answer(question, mode=mode)
 
     if show_json:
         # 用 typer.echo 而不是 console.print_json：后者会做语法高亮，
         # 输出里带 ANSI 转义序列，`json.loads` 直接解析失败。
         # 一个叫 --json 的开关必须产出能被机器解析的 JSON。
-        typer.echo(json.dumps(bundle.to_dict(), ensure_ascii=False, indent=2))
+        # 净化和人读路径走同一套：`\x1b`/`\x07` 不能借 JSON 逃出去。
+        typer.echo(json.dumps(_sanitize_bundle_dict(bundle.to_dict()),
+                              ensure_ascii=False, indent=2))
     else:
         _print_bundle(bundle)
 
@@ -580,6 +765,15 @@ def _latest_doc_dir(cfg: Config, pdf: Path | None = None) -> Path | None:
         # 那会让人以为在看 A 文档，实际读的是 B 文档的产物。
         candidates = [p for p in candidates if p.name.startswith(pdf.stem)]
     return max(candidates, key=lambda p: p.stat().st_mtime) if candidates else None
+
+
+def _artifact_source_type(doc_dir: Path) -> str:
+    """读一份产物的 manifest，判断它是 PDF 还是 DOCX。
+
+    升级前的 PDF 产物没有 `source.source_type`；缺字段就是 PDF。
+    """
+    manifest = json.loads((doc_dir / "manifest.json").read_text(encoding="utf-8"))
+    return (manifest.get("source") or {}).get("source_type") or "pdf"
 
 
 # ---------------------------------------------------------------- eval
@@ -676,7 +870,17 @@ def eval_cmd(
     console.print(f"金标集 {len(items)} 题，文档 {result.doc_id}（{len(result.chunks)} 个片段）")
 
     notes: list[str] = []
-    engine_name = result.manifest.get("ocr", {}).get("engine") or "unknown"
+    # 来源决定三件事：引擎名、哪些指标"不适用"、以及要不要跑只对页有效的东西。
+    # 一律从 manifest 的 `source.source_type` 取；旧 PDF 产物没有该字段 → pdf。
+    source_type = (
+        (result.manifest.get("source") or {}).get("source_type")
+        or result.profile.source_type
+    )
+    # DOCX **没有识别层**。旧写法会落到 "unknown"，那会被读成"识别引擎未知"，
+    # 而且让 PDF 与 DOCX 两种口径的基线互相可比——两者本来不可比。
+    engine_name = result.manifest.get("ocr", {}).get("engine") or (
+        "docx" if source_type == "docx" else "unknown"
+    )
     if "fixture" in str(engine_name):
         notes.append("本次运行使用 fixture 引擎，**不是真实 OCR 结果**，不得据此声明 OCR 精度。")
     if len(result.chunks) < 30:
@@ -686,12 +890,42 @@ def eval_cmd(
             f"这里把它当作**管路连通性检查**报告，不作为检索质量证据。"
         )
 
+    # DOCX：明确"不适用"，而不是静默产出一组恒为空/恒为零的指标——
+    # 那会被读成"测了，没问题"。PDF 的既有分支一个字都不动。
+    if source_type == "docx":
+        notes.append(
+            "评估对象是 DOCX 原生文本：没有页、没有 OCR 层，"
+            "页码与索引层指标（CER / 表格单元格准确率）**不适用（不是 0）**。"
+        )
+        if transcription is not None:
+            console.print(Panel(
+                "[yellow]--transcription 只适用于 PDF。[/yellow]\n"
+                "它比对的是**按页的 OCR 转写**，而 DOCX 是原生文本、没有识别层，\n"
+                "套上去只会得到一组空数字。本次已忽略。",
+                title="索引层指标不适用", border_style="yellow",
+            ))
+            notes.append("--transcription 只适用于 PDF（DOCX 没有 OCR 层），本次已忽略。")
+            transcription = None
+        if noise_sweep:
+            console.print(Panel(
+                "[yellow]--noise-sweep 只适用于 PDF。[/yellow]\n"
+                "它按**页**污染正文再重建索引，而 DOCX 没有页；\n"
+                "在空页集合上跑只会产出一条恒为拒答的假曲线。本次已忽略。",
+                title="噪声扫描不适用", border_style="yellow",
+            ))
+            notes.append("--noise-sweep 只适用于 PDF（按页污染正文），对 DOCX 已忽略。")
+            noise_sweep = 0
+
     # --- 索引层指标（上下文可信度）---
     #
     # 这一层在报告里**排在最前面**：检索与生成的全部指标都建立在
     # 「检索到的内容是对的」这个前提上，而扫描件场景里它恰恰最不牢靠。
     ocr_metrics: dict = {}
-    if transcription is None:
+    if source_type == "docx":
+        # 没有 OCR 层：上面的 notes 已写明"不适用"，这里不计算、也不写
+        # "未提供 --transcription"——那会让读者以为只是忘了给参数。
+        pass
+    elif transcription is None:
         notes.append(
             "未提供 --transcription，**索引层指标（CER / 表格单元格准确率）本次未计算**。"
             "报告里不会出现这一层——不是它没有问题，是没量。"
@@ -1000,7 +1234,32 @@ def eval_probes(
     from .eval.probes import render_markdown, run_probes
     from .eval.runner import load_golden
     from .ocr.fixture import FixtureOcrEngine
-    from .pipeline import ingest, load_result
+    from .pipeline import ingest, load_result, source_type_of
+
+    # 探针全部是"按页"的（OCR 噪声、跨引擎字段、页级 CER）。DOCX 没有页，
+    # 硬跑只会得到一组恒为空/恒为零的指标——那比报错更糟糕：读者会把
+    # "没测"当成"测了没问题"。所以明确早退并指路。
+    try:
+        source_type = _artifact_source_type(doc) if doc is not None else source_type_of(pdf)
+    except DocqaError as exc:
+        _fail(exc)
+        return
+    except (OSError, KeyError, ValueError) as exc:
+        _fail(InputError(f"读取产物失败：{doc}\n{exc}"))
+        return
+    if source_type != "pdf":
+        _fail(InputError(
+            "eval-probes 只适用于 PDF：它的三项探针都按**页**测量"
+            "（OCR 字符错误、跨引擎字段差异、页级噪声）。\n"
+            "\n"
+            "DOCX 是原生文本、没有页，这些指标对它不适用（不是 0，是没有）。\n"
+            "请改用：\n"
+            "\n"
+            "    docqa eval-docx <x.docx>\n"
+            "\n"
+            "它评估的是 DOCX 真正关心的东西：段落覆盖、引用回环、表格保留。"
+        ))
+        return
 
     cfg = _cfg(read_dotenv=False)
     profile = load_domain(domain, cfg)  # 场景名非法时尽早报错，而不是跑到一半
@@ -1082,6 +1341,98 @@ def eval_probes(
     console.print(table)
     console.print(f"\nMarkdown 报告：{report}")
     console.print(f"JSON 结果：{json_out}")
+
+
+# ---------------------------------------------------------------- eval-docx
+
+@app.command("eval-docx")
+def eval_docx(
+    docx_path: Path = typer.Argument(..., exists=True, help="待评估的 DOCX"),
+    domain: str = typer.Option("standard", "--domain", "-d"),
+    out: Path | None = typer.Option(
+        None, "--out", help="把 Markdown 报告写到文件（默认只打印）。",
+    ),
+    as_json: bool = typer.Option(False, "--json", help="输出结构化 JSON 而不是 Markdown"),
+) -> None:
+    """DOCX 结构评估：段落覆盖、引用回环、表格保留。
+
+    与 `docqa eval` 的区别：那一套指标的锚点是**页**（OCR 字符错误、按页召回），
+    DOCX 没有页，套上去只会得到一组"N/A 被写成 0"的数字。
+    这里评估的是 DOCX 真正会出问题的地方——有没有正文块没进任何片段、
+    引用能不能回到证据、表格值还在不在。
+    """
+    # 惰性 import：评估模块由另一个工作流并行开发，CLI 顶部 import 它会让
+    # 整个 CLI 在模块缺失/未装好时直接起不来。这里给可操作提示，而不是 traceback。
+    try:
+        from .eval.docx_eval import render_markdown, run_docx_eval
+    except (ImportError, SyntaxError) as exc:
+        console.print(Panel(Text(
+            "DOCX 评估模块不可用（docqa.eval.docx_eval 导入失败）。\n"
+            "\n"
+            "`docqa eval-docx` 依赖评估工作流提供的 run_docx_eval / render_markdown。\n"
+            "请确认当前版本包含该模块；在此之前可以先人工核对产物：\n"
+            "\n"
+            "    docqa ingest x.docx\n"
+            "    # 检查 <产物目录>/docx_blocks.jsonl 与 chunks.jsonl 的覆盖关系\n"
+            "\n"
+            f"原始错误：{exc}"
+        ), title="[yellow]eval-docx 不可用[/yellow]", border_style="yellow"))
+        raise typer.Exit(1) from exc
+
+    import tempfile
+
+    from .pipeline import ingest as run_ingest
+
+    cfg = _cfg()
+    profile = load_domain(domain, cfg)  # 场景名非法时尽早报错，而不是跑到一半
+
+    try:
+        # 现场 ingest 到临时目录：评估不该依赖"这台机器上碰巧有哪份产物"，
+        # 也不该在仓库里留下一次性的中间产物。
+        with tempfile.TemporaryDirectory(prefix="docqa-eval-docx-") as tmp:
+            result = run_ingest(
+                docx_path, cfg=cfg, domain=domain,
+                profile=profile, out_root=Path(tmp),
+            )
+            # `run_docx_eval()` 接受 IngestResult 或产物目录（见 eval/docx_eval.py）。
+            # 直接传 result：它内部取 `.out_dir`，报告里也会带上真实产物路径。
+            #
+            # **引用模板必须与真实问答同一套**：评估若固定用默认模板，一个自定义
+            # 域模板下"问答渲染得出、回环解析不回来"的问题在评估里就永远看不见——
+            # 那正是这类评估要拦的东西。模板不合法时评估会让 gate 失败（退出码 6），
+            # 而不是默默按默认模板放行。
+            payload = run_docx_eval(
+                result,
+                docx_template=getattr(profile, "docx_citation_template", None),
+            )
+            markdown = render_markdown(payload)
+    except DocqaError as exc:
+        _fail(exc)
+        return
+
+    if not isinstance(markdown, str):
+        markdown = str(markdown)
+
+    gates_passed = (
+        payload.get("gates_passed")
+        if isinstance(payload, dict)
+        else getattr(payload, "gates_passed", True)
+    )
+
+    if as_json:
+        data = payload.to_dict() if hasattr(payload, "to_dict") else payload
+        typer.echo(json.dumps(data, ensure_ascii=False, indent=2, default=str))
+    else:
+        console.print(markdown)
+
+    if out is not None:
+        out.parent.mkdir(parents=True, exist_ok=True)
+        out.write_text(markdown, encoding="utf-8")
+        console.print(f"\nMarkdown 报告：{out}")
+
+    if gates_passed is False:
+        # 与 `docqa eval` 的回归门同一套语义：不通过的评估必须能被 CI 看见。
+        raise typer.Exit(EXIT_VERIFICATION)
 
 
 # ---------------------------------------------------------------- serve

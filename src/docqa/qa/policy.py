@@ -32,8 +32,8 @@ from dataclasses import dataclass
 
 from ..config import QaConfig
 from ..logging import get_logger
-from ..models import Chunk, Citation, ClarificationOption, RefusalReason
-from .verify import normalize
+from ..models import AnswerMode, Chunk, Citation, ClarificationOption, RefusalReason
+from .verify import _CITATION_MARK_RE, normalize
 
 _log = get_logger("qa.policy")
 
@@ -218,6 +218,29 @@ def _query_overlap(query: str, text: str) -> float:
     return query_term_coverage(query, text)
 
 
+def _locator_interpretation(chunk: Chunk) -> str:
+    """歧义候选的"这是哪一段"说明。
+
+    有条号路径时沿用条款路径；否则按 locator 回退：
+    PDF 显示「第 N 页」，DOCX 显示「§条号 ¶段落号」。
+    **不能写死「第 None 页」**——DOCX 没有页。
+    """
+    path = "；".join(p for p in chunk.clause_path if p)
+    if path:
+        return path
+    if chunk.locator_kind == "paragraph":
+        bits = [
+            f"§{chunk.section}" if chunk.section else "",
+            f"¶{chunk.para_no}" if chunk.para_no is not None else "",
+        ]
+        located = " ".join(b for b in bits if b)
+        return located or chunk.chunk_id
+    if chunk.page_no is not None:
+        return f"第 {chunk.page_no} 页"
+    # 连页码都没有的边界情况：宁可给 chunk_id，也不写「第 None 页」。
+    return chunk.chunk_id
+
+
 def detect_ambiguity(
     question: str, hits: list[tuple[Chunk, float]], *, max_candidates: int = 2
 ) -> list[ClarificationOption]:
@@ -254,15 +277,19 @@ def detect_ambiguity(
             continue
         candidates.append(
             ClarificationOption(
-                interpretation="；".join(p for p in chunk.clause_path if p)
-                or f"第 {chunk.page_no} 页",
+                interpretation=_locator_interpretation(chunk),
                 value="、".join(sorted(numbers))[:80],
                 citation=Citation(
                     page_no=chunk.page_no,
                     clause_label=chunk.clause_label,
                     chunk_id=chunk.chunk_id,
                     quote=chunk.text[:120],
-                    para_no=chunk.ordinal,
+                    para_no=chunk.para_no if chunk.para_no is not None else chunk.ordinal,
+                    doc_id=chunk.doc_id,
+                    locator_kind=chunk.locator_kind,
+                    section=chunk.section,
+                    para_end=chunk.para_end,
+                    evidence_chunk_ids=(chunk.chunk_id,),
                 ),
             )
         )
@@ -288,6 +315,7 @@ def decide(
     candidates: list[ClarificationOption],
     coverage: float = 1.0,
     existence_question: bool = False,
+    answer_mode: AnswerMode = "strict",
 ) -> Decision:
     """决定是否拒答，以及拒答的理由。
 
@@ -295,6 +323,11 @@ def decide(
     先看证据是否触及了识别失败的页（这是硬事实），再看歧义（有具体候选），
     然后看自检（有具体失败项），最后才看分数阈值（纯统计判断）。
     顺序反了会把明确的问题报成模糊的问题。
+
+    hybrid 只跳过**统计类**的 4–7 步（无证据 / 覆盖率 / 低分 / 分差）：
+    这些判据回答的是"文档里有没有相关内容"，而 hybrid 允许用模型知识补充
+    文档没有的部分。前三步是硬事实与文档正文的自检，**hybrid 一样拒**——
+    用模型知识掩盖"这页没读出来"或"正文自检不过"，等于毁掉可追溯性。
     """
     # 1) 证据触及识别失败的页 —— 我们根本不知道那页写了什么
     #
@@ -302,8 +335,12 @@ def decide(
     # 多文档检索时，不同文档的第 3 页是两回事：A 文档第 3 页识别失败、
     # B 文档第 3 页好好的，只比页码会让 B 的证据**误触发一次拒答**。
     # 拒答本身是安全侧的，但误拒答会让人不再信任拒答。
+    #
+    # DOCX 证据没有页码（page_no=None），它不会被"失败页"命中——
+    # 这条检查只对 PDF 生效，否则 `第 None 页` 会混进拒答理由。
     bad_pages = sorted(
-        c.page_no for c in evidence_chunks if (c.doc_id, c.page_no) in failed_pages
+        c.page_no for c in evidence_chunks
+        if c.page_no is not None and (c.doc_id, c.page_no) in failed_pages
     )
     if bad_pages:
         return Decision(
@@ -338,6 +375,12 @@ def decide(
                 f"证据已附在下方，请人工核对。"
             ),
         )
+
+    # hybrid：文档没有覆盖的部分由模型知识补充，因此 4–7 步（无证据 /
+    # 覆盖率 / 低分 / 分差）不再构成拒答理由。前三步已经走完：
+    # 未识别页与歧义仍拒答，正文自检失败仍拒答。
+    if answer_mode == "hybrid":
+        return Decision(refused=False)
 
     # 4) 完全没有证据
     if not evidence_chunks:
@@ -406,6 +449,60 @@ def decide(
     return Decision(refused=False)
 
 
+# 否定标记。`is_in_document_negative` 保持原有集合不变（strict 语义不动）。
+_NEGATIVE_MARKERS = (
+    "未规定", "没有规定", "未涉及", "不涉及", "未作规定", "并未规定", "未包含", "不包含",
+)
+
+# ---------------------------------------------------------------- 通用否定白名单
+#
+# hybrid 的零引用放行**只**接受“通用否定短句”，用精确模板匹配，
+# 不再用“含否定词 + 情态词黑名单”的启发式（NEW-7：`使用`/`要求`/`含有`/
+# `达到`/… 任意一个正向谓词都能绕过有限黑名单）。
+#
+# 模板只允许：文档/本标准/本文件/该文档/该标准 + 方位 + 未/没有/并未 +
+# 否定谓词 + 可选泛化宾语。任何具体对象、谓词、说明（“未规定冲击韧性要求”）
+# 都不匹配——这类具体否定必须引用真实证据，或改写成通用否定 + 补充段。
+_GENERIC_NEGATIVE_RE = re.compile(
+    r"^(?:文档|本标准|本文件|该文档|该标准)(?:中|里|内)?"
+    r"(?:未|没有|并未)"
+    r"(?:规定|提及|涉及|包含|收录|给出|找到|说明|列出)"
+    r"(?:任何|相关|此项|该|上述)?"
+    r"(?:内容|要求|信息|规定|说明|条款|事项)?"
+    r"[。.]?$"
+)
+_GENERIC_NEGATIVE_SPLIT_RE = re.compile(r"[；;。]")
+
+
+def is_generic_negative(answer_text: str) -> bool:
+    """整段正文是否由**通用否定短句**组成（hybrid 零引用白名单）。
+
+    每个非空分句都必须完整匹配 `_GENERIC_NEGATIVE_RE`。判定是精确模板，
+    不是词表黑名单：
+
+    - `文档中未规定。` / `本标准未提及相关内容。` → True；
+    - `文档中未规定冲击韧性要求。`（具体对象）→ False；
+    - `文档中未规定 A；B 类材料使用合金钢。`（正向谓词 + 额外内容）→ False；
+    - 无标点 run-on（`未规定 A 的要求 B 使用合金钢`）→ False。
+
+    引用标记先剥离：`文档中未规定。[p.1 §3.1]` 仍是通用否定；但伪引用
+    会由 `doc_citation_marks` GATE 另行拦截（NEW-9），不在这里放行。
+
+    空文本返回 False：hybrid 的空正文只有 `knowledge_used=True` 时才允许零引用。
+    """
+    if not answer_text:
+        return False
+    without_citations = _CITATION_MARK_RE.sub(" ", answer_text)
+    clauses = [
+        clause.strip()
+        for clause in _GENERIC_NEGATIVE_SPLIT_RE.split(without_citations)
+        if clause.strip()
+    ]
+    if not clauses:
+        return False
+    return all(_GENERIC_NEGATIVE_RE.match(clause) is not None for clause in clauses)
+
+
 def is_in_document_negative(answer_text: str) -> bool:
     """识别"文档明确说没有"这种否定型答案。
 
@@ -415,5 +512,4 @@ def is_in_document_negative(answer_text: str) -> bool:
     """
     if not answer_text:
         return False
-    markers = ("未规定", "没有规定", "未涉及", "不涉及", "未作规定", "并未规定", "未包含", "不包含")
-    return any(m in answer_text for m in markers)
+    return any(m in answer_text for m in _NEGATIVE_MARKERS)

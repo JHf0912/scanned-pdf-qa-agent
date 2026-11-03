@@ -63,6 +63,10 @@ class GoldenItem:
     expected_refusal: bool = False
     expected_reason: str | None = None
     citation_pages: list[int] = field(default_factory=list)
+    # DOCX 没有页，引用的定位是 `[§3.6 ¶4]` 这类字符串。它与 `citation_pages`
+    # 并存而不是替换：混合语料（PDF+DOCX）里两种定位都会出现。
+    # 可选字段——旧 PDF 金标集无需改动。
+    citation_locators: list[str] = field(default_factory=list)
     # 检索层指标（Recall@k / MRR / nDCG）需要的"相关片段"清单。
     #
     # 为什么它不能从 `citation_pages` 自动推导
@@ -87,6 +91,7 @@ class GoldenItem:
             expected_refusal=bool(d.get("expected_refusal")),
             expected_reason=d.get("expected_reason"),
             citation_pages=list(d.get("citation_pages") or []),
+            citation_locators=list(d.get("citation_locators") or []),
             relevant_chunk_ids=list(d.get("relevant_chunk_ids") or []),
             notes=d.get("notes", ""),
         )
@@ -137,7 +142,17 @@ def score_item(item: GoldenItem, bundle: AnswerBundle) -> dict:
         "answer": answer[:300],
         "attempts": bundle.attempts,
         "n_citations": len(bundle.citations),
-        "citation_pages": sorted({c.page_no for c in bundle.citations}),
+        # 只收集**真的有页码**的引用。混合 PDF+DOCX 时 `sorted({c.page_no})`
+        # 会在遇到 `None` 时直接抛 TypeError，把整轮评估打断；
+        # 过滤之后这个键仍保持"页码列表"的原意，PDF 报告口径不变。
+        "citation_pages": sorted({c.page_no for c in bundle.citations if c.page_no is not None}),
+        # 引用**渲染后的出处**：PDF 是 `[p.3 §3.6]`，DOCX 是 `[§3.6 ¶4]`。
+        # 报告与判分都用它，而不是从页/段字段自己再拼一遍——
+        # 拼法只有一个来源（`Citation.render`），否则两处迟早不一致。
+        "citation_locators": sorted(
+            {c.render(bundle.citation_template, bundle.docx_citation_template)
+             for c in bundle.citations}
+        ),
         "gates_passed": bundle.verification.gates_passed,
         "support_score": round(bundle.verification.support_score, 3),
         # 逐项检查结果，供 HTML 报告渲染红绿标记
@@ -171,16 +186,32 @@ def score_item(item: GoldenItem, bundle: AnswerBundle) -> dict:
     missing = [s for s in item.must_contain if s and s not in answer]
     forbidden = [s for s in item.must_not_contain if s and s in answer]
 
-    # 引用页码是否正确
-    page_ok = True
+    # --- 引用定位是否正确 ---
+    #
+    # 这里刻意用三态（True / False / None），因为"没量"与"错了"是两件事：
+    #   完全没有引用          -> False（该引却没引，是失败；算成 N/A 会抬高准确率）
+    #   有引用但没有任何页码   -> None（DOCX/混合语料：没有任何页码可比对）
+    #   有页码                -> 与金标页码取交集
+    page_ok: bool | None = True
     if item.citation_pages:
-        cited = {c.page_no for c in bundle.citations}
-        page_ok = bool(cited & set(item.citation_pages))
+        if not bundle.citations:
+            page_ok = False
+        else:
+            cited_pages = set(detail["citation_pages"])
+            page_ok = bool(cited_pages & set(item.citation_pages)) if cited_pages else None
+
+    locator_ok = True
+    if item.citation_locators:
+        locator_ok = bool(set(detail["citation_locators"]) & set(item.citation_locators))
 
     detail["missing_facts"] = missing
     detail["forbidden_hits"] = forbidden
     detail["citation_page_ok"] = page_ok
-    detail["passed"] = bool(not missing and not forbidden and page_ok)
+    if item.citation_locators:
+        detail["citation_locator_ok"] = locator_ok
+    detail["passed"] = bool(
+        not missing and not forbidden and page_ok is not False and locator_ok
+    )
     return detail
 
 
@@ -189,10 +220,17 @@ def context_utilization(bundle: AnswerBundle) -> float:
 
     这个指标很便宜但信号很强：如果召回了 6 条却只引用 1 条，
     说明检索基本没起作用。参考资料给出的生产告警阈值是 <40%。
+
+    一个引用可能对应**多个**证据片段（DOCX 的超长段落被切成 b2/b3/b4，
+    共享同一个 `[§1 ¶2]`）。只数 `chunk_id` 会把这种情况算成"只引了 1 条"，
+    指标被人为压低；`evidence_chunk_ids` 里的片段都算被引用过。
     """
     if not bundle.hits:
         return 0.0
-    cited = {c.chunk_id for c in bundle.citations}
+    cited: set[str] = set()
+    for citation in bundle.citations:
+        cited.add(citation.chunk_id)
+        cited.update(getattr(citation, "evidence_chunk_ids", ()) or ())
     retrieved = {h.chunk_id for h in bundle.hits}
     return len(cited & retrieved) / len(retrieved) if retrieved else 0.0
 
@@ -342,6 +380,12 @@ class EvalReport:
     # 解析产物（逐页 OCR 结果），供报告渲染「解析结果」小节
     pages: list = field(default_factory=list, repr=False)
     manifest: dict = field(default_factory=dict)
+    # 来源类型决定报告怎么渲染：PDF 有页与 OCR 层，DOCX 两者都没有。
+    # 默认 "pdf" 让旧调用点与旧基线零改动；DOCX 由 `run_eval` 从 manifest
+    # 的 `source.source_type` 读取。
+    source_type: str = "pdf"
+    # DOCX 的结构统计（`DocxStats.to_dict()`，来自 manifest 的 `docx` 键）。
+    docx: dict = field(default_factory=dict)
 
     def to_dict(self) -> dict:
         data = asdict(self)
@@ -389,16 +433,30 @@ def run_eval(
     notes: list[str] | None = None,
     pages: list | None = None,
     manifest: dict | None = None,
+    source_type: str | None = None,
+    docx: dict | None = None,
 ) -> EvalReport:
     """跑完整评估。
 
     Args:
         ask: 可调用对象 `(question) -> AnswerBundle`。
+        source_type: 来源类型（`"pdf"` / `"docx"`）。为 None 时从
+            `manifest["source"]["source_type"]` 读取，再退到 `"pdf"`——
+            于是旧调用点不传也不会让 PDF 报告改口径。
+        docx: DOCX 结构统计。为 None 时从 `manifest["docx"]` 读取。
     """
     started = time.time()
     per_item: list[dict] = []
     per_category: dict[str, list[bool]] = {}
     bundles: list[tuple[GoldenItem, AnswerBundle]] = []
+
+    manifest_meta = manifest if isinstance(manifest, dict) else {}
+    source_meta = manifest_meta.get("source")
+    if not isinstance(source_meta, dict):
+        source_meta = {}
+    resolved_source_type = source_type or str(source_meta.get("source_type") or "pdf")
+    docx_meta = manifest_meta.get("docx")
+    resolved_docx = docx if docx is not None else (docx_meta if isinstance(docx_meta, dict) else {})
 
     for item in items:
         t0 = time.perf_counter()
@@ -516,6 +574,8 @@ def run_eval(
         bundles=bundles,
         pages=pages or [],
         manifest=manifest or {},
+        source_type=resolved_source_type,
+        docx=resolved_docx,
     )
     _log.info(
         "评估完成",
