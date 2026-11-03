@@ -112,6 +112,24 @@ export interface EvidenceText {
   section?: string | null;
   para_no?: number | null;
   para_end?: number | null;
+  /** 引用在页图上的位置（相对页面的比例坐标，0~1）。 */
+  bboxes?: BBox[];
+  /** 页图信息；没有页图（DOCX / 文本层页）时为 null，前端退回纯文本高亮。 */
+  page_image?: PageImageInfo | null;
+}
+
+export interface BBox {
+  page_no: number;
+  x0: number;
+  y0: number;
+  x1: number;
+  y1: number;
+}
+
+export interface PageImageInfo {
+  url: string;
+  width: number | null;
+  height: number | null;
 }
 
 export type AnswerMode = "strict" | "hybrid";

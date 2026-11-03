@@ -215,6 +215,39 @@ class PageImage:
     upscale: float = 1.0  # 相对原生尺寸的放大倍数（用于 A/B 实验留痕）
 
 
+@dataclass(frozen=True)
+class BBox:
+    """引用在**页图上的位置**，用相对页面的比例坐标（0~1）表示。
+
+    为什么用比例而不是像素 / PDF 点
+    -------------------------------
+    不同 OCR 引擎给出的 `OcrBlock.bbox` 单位并不相同：
+    VLM / fixture 引擎给的是**页图像素坐标**，原生文本层引擎（PyMuPDF）
+    给的是**PDF 点坐标（72 dpi）**。如果原样透传给前端，前端就必须知道
+    每一页用了哪个引擎、图是按多少 dpi 渲染的，才能把框画对——任何一处
+    upscale / 重采样都会让框整体偏移。
+
+    所以在装载阶段就统一换算成"占页面的比例"，前端只用 `viewBox="0 0 1 1"`
+    的 SVG 覆盖在同一张图上，缩放、响应式、缩略图都不需要再重算坐标。
+    `page_no` 保留，因为一个 chunk 可能跨页（引用高亮只取被引页）。
+    """
+
+    page_no: int
+    x0: float
+    y0: float
+    x1: float
+    y1: float
+
+    def to_dict(self) -> dict:
+        return {
+            "page_no": self.page_no,
+            "x0": round(self.x0, 5),
+            "y0": round(self.y0, 5),
+            "x1": round(self.x1, 5),
+            "y1": round(self.y1, 5),
+        }
+
+
 # ---------------------------------------------------------------- OCR 产物
 
 @dataclass
@@ -393,6 +426,9 @@ class Chunk:
     # DOCX：¶n = 文档顺序第 n 个非空正文块（段落或线性化表格；标题计入）。
     para_no: int | None = None
     para_end: int | None = None
+    # 该片段在页图上的位置（比例坐标）。PDF 扫描页用于页图高亮；
+    # DOCX / 文本层页通常为空——那时前端退回纯文本高亮，不假装有页图。
+    bboxes: tuple[BBox, ...] = ()
 
     def to_dict(self) -> dict:
         return {
@@ -411,6 +447,7 @@ class Chunk:
             "section": self.section,
             "para_no": self.para_no,
             "para_end": self.para_end,
+            "bboxes": [b.to_dict() for b in self.bboxes],
         }
 
 
@@ -500,6 +537,8 @@ class Citation:
     # 它们共享同一个 `[§1 ¶2]`；只认第一片会让后续片里的数值被判成幻觉。
     # 单 chunk（含全部 PDF 路径）时为 `(chunk_id,)`。
     evidence_chunk_ids: tuple[str, ...] = ()
+    # 引用在页图上的位置（比例坐标）。来源 chunk 的 bboxes，前端据此画高亮框。
+    bboxes: tuple[BBox, ...] = ()
 
     def render(self, template: str | None = None,
                docx_template: str | None = None) -> str:
@@ -693,6 +732,7 @@ class AnswerBundle:
                     "para_no": c.para_no,
                     "para_end": c.para_end,
                     "evidence_chunk_ids": list(c.evidence_chunk_ids),
+                    "bboxes": [b.to_dict() for b in c.bboxes],
                     "rendered": c.render(self.citation_template,
                                          self.docx_citation_template),
                 }

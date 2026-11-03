@@ -34,7 +34,7 @@ from .errors import ConfigError, InputError, PageOcrError
 from .index import HybridIndex
 from .injection import InjectionReport, scan_pages, scan_text
 from .logging import get_logger, stage
-from .models import Chunk, OcrPage, PageImage, SourceProfile
+from .models import BBox, Chunk, OcrBlock, OcrPage, PageImage, SourceProfile
 from .ocr import OcrEngine
 from .ocr.spotcheck import spotcheck_page
 from .ocr.textlayer import TextLayerEngine
@@ -718,6 +718,48 @@ def _sum_usage(pages: list[OcrPage]) -> dict:
     }
 
 
+def _page_bbox_normalizer(img_by_page: dict[int, dict], prov_by_page: dict[int, str]):
+    """把某一页的 `OcrBlock.bbox` 换算成相对页面的比例坐标（0~1）。
+
+    单位按引擎区分：文本层引擎给的是 PDF 点（72 dpi），其余引擎给的是
+    页图像素。见 `models.BBox` 的说明。换算用**服务端渲染的那张图**的
+    宽高/DPI，保证覆盖层与前端实际加载的图完全对齐。
+    """
+
+    def norm(block: OcrBlock) -> BBox | None:
+        im = img_by_page.get(block.page_no)
+        if im is None or block.bbox is None:
+            return None
+        w = float(im.get("width") or 0.0)
+        h = float(im.get("height") or 0.0)
+        if w <= 0 or h <= 0:
+            return None
+        try:
+            x0, y0, x1, y1 = (float(v) for v in block.bbox)
+        except (TypeError, ValueError):
+            return None
+        if "textlayer" in prov_by_page.get(block.page_no, ""):
+            dpi = float(im.get("dpi") or 0.0)
+            if dpi <= 0:
+                return None
+            divx, divy = w / dpi * 72.0, h / dpi * 72.0
+        else:
+            divx, divy = w, h
+        if divx <= 0 or divy <= 0:
+            return None
+
+        def clamp(v: float) -> float:
+            return min(max(v, 0.0), 1.0)
+
+        nx0, nx1 = clamp(min(x0, x1) / divx), clamp(max(x0, x1) / divx)
+        ny0, ny1 = clamp(min(y0, y1) / divy), clamp(max(y0, y1) / divy)
+        if nx1 - nx0 <= 1e-4 or ny1 - ny0 <= 1e-4:
+            return None
+        return BBox(page_no=block.page_no, x0=nx0, y0=ny0, x1=nx1, y1=ny1)
+
+    return norm
+
+
 def load_result(out_dir: Path, cfg: Config, domain: str) -> IngestResult:
     """从已落盘的产物重建 IngestResult，无需重新识别。
 
@@ -768,11 +810,33 @@ def load_result(out_dir: Path, cfg: Config, domain: str) -> IngestResult:
     )
 
     chunks: list[Chunk] = []
+    # 页图 / 引擎信息，用于把块的 bbox 归一化成分页比例坐标（见 _page_bbox_normalizer）。
+    img_by_page = {
+        int(im["page_no"]): im
+        for im in (manifest.get("render") or {}).get("images") or []
+        if im.get("page_no") is not None
+    }
+    prov_by_page = {p.page_no: (p.provider or "") for p in pages}
+    blk_by_id = {b.block_id: b for p in pages for b in p.blocks}
+    _norm = _page_bbox_normalizer(img_by_page, prov_by_page)
+
     with (out_dir / "chunks.jsonl").open(encoding="utf-8") as fh:
         for line in fh:
             if not line.strip():
                 continue
             d = json.loads(line)
+            block_ids = tuple(d.get("block_ids") or ())
+            # bboxes 是派生数据，不写进 chunks.jsonl（旧产物没有、也不需要重建）：
+            # 每次装载都从 ocr.json 的块 bbox 现算，保证旧产物也能直接获得页图高亮。
+            if d.get("bboxes"):
+                bboxes = tuple(BBox(**b) for b in d["bboxes"])
+            else:
+                bboxes = tuple(
+                    bb
+                    for bid in block_ids
+                    if (blk := blk_by_id.get(bid)) is not None
+                    if (bb := _norm(blk)) is not None
+                )
             chunks.append(
                 Chunk(
                     chunk_id=d["chunk_id"],
@@ -784,12 +848,13 @@ def load_result(out_dir: Path, cfg: Config, domain: str) -> IngestResult:
                     clause_path=tuple(d.get("clause_path") or ()),
                     clause_label=d.get("clause_label"),
                     table_id=d.get("table_id"),
-                    block_ids=tuple(d.get("block_ids") or ()),
+                    block_ids=block_ids,
                     char_len=d.get("char_len", len(d["text"])),
                     locator_kind=d.get("locator_kind", "page"),
                     section=d.get("section"),
                     para_no=d.get("para_no"),
                     para_end=d.get("para_end"),
+                    bboxes=bboxes,
                 )
             )
 

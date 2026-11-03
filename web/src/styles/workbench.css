@@ -926,6 +926,53 @@
   color: inherit;
 }
 
+/* 引用页图：底图 + 比例坐标高亮覆盖层（见 EvidencePanel.BBoxLayer）。
+   覆盖层的 viewBox 是 0~1，所以缩放、缩略图、响应式都不需要重算坐标。 */
+.evidence-page {
+  display: block;
+  margin: 4px 0 2px;
+}
+
+.evidence-page-inner {
+  position: relative;
+  display: inline-block;
+  max-width: 100%;
+  line-height: 0;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  overflow: hidden;
+  background: #fff;
+}
+
+.evidence-page-inner img {
+  display: block;
+  max-width: 100%;
+  max-height: 320px;
+  width: auto;
+  height: auto;
+}
+
+.evidence-bbox-layer {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+}
+
+.evidence-bbox-layer rect {
+  fill: rgba(255, 196, 0, 0.16);
+  stroke: #e0a800;
+  stroke-width: 2px;
+}
+
+.evidence-page-cap {
+  display: block;
+  margin-top: 2px;
+  color: var(--muted);
+  font-size: 9.5px;
+}
+
 /* ---------------------------------------------------------------- overview */
 
 .overview dl {

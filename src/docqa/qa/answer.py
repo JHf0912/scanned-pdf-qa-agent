@@ -373,6 +373,7 @@ def _parse_page_citation(
         locator_kind="page",
         section=target.section,
         evidence_chunk_ids=(target.chunk_id,),
+        bboxes=tuple(b for b in target.bboxes if b.page_no == page),
     )
 
 
@@ -414,6 +415,7 @@ def _parse_docx_citation(
             if targets[0].para_end is not None else targets[0].para_no
         ),
         evidence_chunk_ids=evidence_ids,
+        bboxes=targets[0].bboxes,
     )
 
 
@@ -568,6 +570,7 @@ def draft_answer(
                     section=c.section,
                     para_end=c.para_end,
                     evidence_chunk_ids=(c.chunk_id,),
+                    bboxes=c.bboxes,
                 )
                 for c in chunks
             ],

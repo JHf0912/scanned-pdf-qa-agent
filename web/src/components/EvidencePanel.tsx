@@ -1,7 +1,51 @@
 import { useEffect, useMemo, useRef } from "react";
-import type { Chunk, Citation, EvidenceText, RetrievalHit } from "../types";
+import type { BBox, Chunk, Citation, EvidenceText, RetrievalHit } from "../types";
 import { formatLocator, formatScore, highlightQuote } from "../format";
 import { EmptyState } from "./States";
+
+/** 引用在页图上的高亮覆盖层。viewBox 用 0~1，配合 preserveAspectRatio="none"
+ *  让比例坐标直接铺满图片，与缩放/响应式无关。 */
+function BBoxLayer({ bboxes }: { bboxes: BBox[] }) {
+  return (
+    <svg
+      className="evidence-bbox-layer"
+      viewBox="0 0 1 1"
+      preserveAspectRatio="none"
+      aria-hidden="true"
+    >
+      {bboxes.map((b, i) => (
+        <rect
+          key={i}
+          x={b.x0}
+          y={b.y0}
+          width={Math.max(0.002, b.x1 - b.x0)}
+          height={Math.max(0.002, b.y1 - b.y0)}
+          vectorEffect="non-scaling-stroke"
+        />
+      ))}
+    </svg>
+  );
+}
+
+function PageSnapshot({
+  src,
+  alt,
+  bboxes,
+}: {
+  src: string;
+  alt: string;
+  bboxes: BBox[];
+}) {
+  return (
+    <span className="evidence-page">
+      <span className="evidence-page-inner">
+        <img src={src} alt={alt} loading="lazy" decoding="async" />
+        <BBoxLayer bboxes={bboxes} />
+      </span>
+      <span className="evidence-page-cap">页图 · 引用位置已高亮</span>
+    </span>
+  );
+}
 
 interface EvidencePanelProps {
   chunks: Chunk[];
@@ -105,6 +149,9 @@ export function EvidencePanel({
     <div className="evidence-list">
       {items.map(({ chunk, hit, citation }) => {
         const active = activeChunkId === chunk.chunk_id;
+        const ev = evidence[chunk.chunk_id];
+        const pageImage = ev?.page_image ?? null;
+        const bboxes = ev?.bboxes ?? [];
         const segments = citation
           ? highlightQuote(chunk.text, citation.quote)
           : [{ text: chunk.text, match: false }];
@@ -141,6 +188,13 @@ export function EvidencePanel({
                 <span className="evidence-score">被引用</span>
               )}
             </span>
+            {pageImage && bboxes.length > 0 ? (
+              <PageSnapshot
+                src={pageImage.url}
+                alt={`第 ${chunk.page_no ?? ""} 页`}
+                bboxes={bboxes}
+              />
+            ) : null}
             <span className="evidence-text">
               {segments.map((segment, index) =>
                 segment.match ? (

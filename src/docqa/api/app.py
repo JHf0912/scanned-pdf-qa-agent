@@ -40,9 +40,10 @@ import time
 import unicodedata
 from pathlib import Path
 from typing import Literal
+from urllib.parse import quote
 
 from fastapi import FastAPI, HTTPException, Request
-from fastapi.responses import HTMLResponse, JSONResponse
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
@@ -562,6 +563,49 @@ def create_app(cfg: Config, *, domain: str = "standard") -> FastAPI:
             for c in state["result"].chunks
         ])
 
+    # ---------------------------------------------------------------- 页图
+
+    @app.get("/api/page-image")
+    def page_image(doc_id: str, page_no: int) -> FileResponse:
+        """返回某份产物某一页的页图（引用 bbox 高亮的底图）。
+
+        只服务**本工具自己 ingest 出来的页图**：`doc_id` 必须能在
+        `_discover()` 里找到（未知 doc_id 直接 404，天然挡住目录穿越），
+        文件名取自 manifest 的 `render.images`，再用 `Path(...).name` 兜底。
+        DOCX 与纯文本层页没有页图 → 404，前端据此退回纯文本高亮。
+        """
+        d = _dir_for(doc_id)
+        if d is None:
+            raise HTTPException(404, "找不到该文档产物")
+        try:
+            data = json.loads((d / "manifest.json").read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            raise HTTPException(404, "产物清单不可读") from None
+        images = {
+            int(im["page_no"]): im
+            for im in (data.get("render") or {}).get("images") or []
+            if im.get("page_no") is not None
+        }
+        im = images.get(page_no)
+        if im is None:
+            raise HTTPException(404, "该页没有页图")
+        fname = Path(str(im.get("file") or "")).name
+        if not fname:
+            raise HTTPException(404, "该页没有页图文件")
+        pages_dir = (d / "pages").resolve()
+        path = pages_dir / fname
+        # 兜底：解析后的真实路径必须仍落在 pages/ 之下。
+        try:
+            path.resolve().relative_to(pages_dir)
+        except ValueError:
+            raise HTTPException(404, "页图路径非法") from None
+        if not path.is_file():
+            raise HTTPException(404, "页图文件缺失")
+        media = mimetypes.guess_type(fname)[0] or "image/png"
+        return FileResponse(
+            path, media_type=media, headers={"Cache-Control": "public, max-age=3600"}
+        )
+
     # ---------------------------------------------------------------- 上传
 
     async def _upload_impl(request: Request) -> JSONResponse:
@@ -791,12 +835,25 @@ def create_app(cfg: Config, *, domain: str = "standard") -> FastAPI:
             payload["server_elapsed_ms"] = int((time.perf_counter() - t0) * 1000)
             # 附上被引证据的全文，供前端高亮
             idx = state["result"].index
+            doc_id = state["result"].doc_id
+            render_imgs = {
+                int(im["page_no"]): im
+                for im in (state["result"].manifest.get("render") or {}).get("images") or []
+                if im.get("page_no") is not None
+            }
             payload["evidence"] = {}
             for citation in bundle.citations:
                 # 定位字段以**索引里的 chunk** 为准：Citation 上的 para_no
                 # 可能被模型写成引用里的那个数，而前端要高亮的是整段证据。
                 chunk = idx.chunk(citation.chunk_id)
-                payload["evidence"][citation.chunk_id] = {
+                # 页图 bbox：优先用 chunk 上归一化好的比例坐标，且只保留被引页的框。
+                raw_boxes = chunk.bboxes if chunk else citation.bboxes
+                if citation.page_no is not None:
+                    boxes = [b.to_dict() for b in raw_boxes if b.page_no == citation.page_no]
+                else:
+                    boxes = [b.to_dict() for b in raw_boxes]
+                im = render_imgs.get(citation.page_no) if citation.page_no is not None else None
+                evidence_entry = {
                     # 证据原文同样来自文档，可能夹带控制字符：净化后再出 API。
                     "text": _sanitize_outlet(idx.evidence_text(citation.chunk_id)),
                     "page_no": citation.page_no,
@@ -805,7 +862,19 @@ def create_app(cfg: Config, *, domain: str = "standard") -> FastAPI:
                     "section": chunk.section if chunk else citation.section,
                     "para_no": chunk.para_no if chunk else citation.para_no,
                     "para_end": chunk.para_end if chunk else citation.para_end,
+                    "bboxes": boxes,
+                    # 只有"有页图且确有 bbox"时才给 page_image；否则前端退回文本高亮。
+                    "page_image": (
+                        {
+                            "url": f"/api/page-image?doc_id={quote(doc_id)}&page_no={citation.page_no}",
+                            "width": im.get("width"),
+                            "height": im.get("height"),
+                        }
+                        if (im is not None and boxes)
+                        else None
+                    ),
                 }
+                payload["evidence"][citation.chunk_id] = evidence_entry
             return JSONResponse(json.loads(json.dumps(payload, ensure_ascii=False)))
         finally:
             ask_slots.release()
