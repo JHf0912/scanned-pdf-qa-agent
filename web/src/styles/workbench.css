@@ -2262,3 +2262,19 @@
 
 .login-switch { margin: 0; text-align: center; font-size: 12.5px; color: #6b7478; }
 .login-switch button { border: none; background: none; color: #0aa; cursor: pointer; font: inherit; padding: 0 2px; text-decoration: underline; }
+
+/* ---- 文档列表：方案 B（整行预览 + 复选框选中） ---- */
+.doc-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
+.doc-row { display: flex; align-items: center; gap: 10px; padding: 9px 10px 9px 11px; border: 1px solid var(--line); border-radius: 12px; background: var(--surface); transition: background 140ms ease, border-color 140ms ease, box-shadow 140ms ease; }
+.doc-row:hover { background: var(--surface-2); }
+.doc-row.is-sel { border-color: #bfeef3; background: var(--cyan-bg); box-shadow: inset 3px 0 0 var(--cyan); }
+.doc-check { flex: 0 0 auto; display: grid; place-items: center; width: 18px; height: 18px; margin: 0; padding: 0; border: 1px solid var(--line-strong); border-radius: 6px; background: var(--surface); color: #fff; font-size: 11px; font-weight: 700; cursor: pointer; }
+.doc-row.is-sel .doc-check { border-color: var(--ink); background: var(--ink); }
+.doc-check:focus-visible { outline: 2px solid var(--cyan); outline-offset: 1px; }
+.doc-row .doc-item { flex: 1 1 auto; width: auto; min-width: 0; display: flex; align-items: center; gap: 8px; padding: 0; border: none; border-radius: 0; background: none; text-align: left; cursor: pointer; color: inherit; }
+.doc-item:hover { background: none; }
+.doc-item:focus-visible { outline: 2px solid var(--cyan); outline-offset: 2px; border-radius: 8px; }
+.doc-main { flex: 1 1 auto; }
+.doc-chev { flex: 0 0 auto; color: #c2c9cc; font-size: 17px; line-height: 1; transition: color 140ms ease; }
+.doc-row:hover .doc-chev { color: var(--muted); }
+.doc-preview-btn { display: none; }

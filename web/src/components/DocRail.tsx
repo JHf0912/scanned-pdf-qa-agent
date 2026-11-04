@@ -93,17 +93,32 @@ export function DocRail({
                 !isDocxSource(doc.source_type, doc.unit_count) &&
                 (doc.failed_pages ?? []).length > 0;
               return (
-                <li key={doc.doc_id} className="doc-row">
+                <li
+                  key={doc.doc_id}
+                  className={`doc-row${isOn ? " is-sel" : ""}`}
+                >
                   <button
                     type="button"
-                    className={`doc-item${isOn ? " is-on" : ""}`}
+                    className="doc-check"
                     aria-pressed={isOn}
+                    aria-label={isOn ? "取消选择" : "选择该文档"}
                     disabled={busy}
-                    onClick={() => onToggle(doc.doc_id)}
+                    onClick={(event) => {
+                      event.stopPropagation();
+                      onToggle(doc.doc_id);
+                    }}
                   >
-                    <span className="doc-check" aria-hidden="true">
-                      {isOn ? "✓" : ""}
-                    </span>
+                    {isOn ? "✓" : ""}
+                  </button>
+                  {/* 整行（除复选框外）点开预览；复选框负责选中，两者不互相触发。 */}
+                  <button
+                    type="button"
+                    className="doc-item"
+                    title="预览该文档原文"
+                    aria-label={`预览 ${docTitle(doc.doc_id)}`}
+                    disabled={busy}
+                    onClick={() => onPreview(doc)}
+                  >
                     <span className="doc-main">
                       <span className="doc-id">{docTitle(doc.doc_id)}</span>
                       <span className="doc-meta">{docMeta(doc) || "—"}</span>
@@ -113,19 +128,9 @@ export function DocRail({
                         </span>
                       ) : null}
                     </span>
-                  </button>
-                  {/* 预览按钮与选中按钮是兄弟节点，点击不会触发选中/提问。 */}
-                  <button
-                    type="button"
-                    className="doc-preview-btn"
-                    aria-label={`预览 ${docTitle(doc.doc_id)}`}
-                    title="直接预览该文档原文"
-                    onClick={(event) => {
-                      event.stopPropagation();
-                      onPreview(doc);
-                    }}
-                  >
-                    预览
+                    <span className="doc-chev" aria-hidden="true">
+                      ›
+                    </span>
                   </button>
                 </li>
               );
