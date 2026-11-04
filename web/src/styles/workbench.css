@@ -2127,3 +2127,74 @@
     max-width: 60vw;
   }
 }
+
+/* ============================================================ 登录分栏 */
+.login-shell { min-height: 100vh; display: grid; grid-template-columns: 1.05fr 0.95fr; background: #f4f6f7; }
+.login-shell-loading { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 14px; color: #6b7478; }
+.login-hero { position: relative; display: flex; flex-direction: column; justify-content: space-between; padding: 40px 52px; color: #eaf3f2; background: linear-gradient(150deg, #0f1b1d 0%, #12292b 55%, #0f3a38 100%); overflow: hidden; }
+.login-hero::after { content: ""; position: absolute; right: -120px; bottom: -140px; width: 420px; height: 420px; border-radius: 50%; background: radial-gradient(circle, rgba(64,224,208,0.18), transparent 70%); }
+.login-hero-brand { display: flex; align-items: center; gap: 10px; font-size: 20px; font-weight: 700; color: #fff; z-index: 1; }
+.login-hero-copy { max-width: 470px; z-index: 1; }
+.login-eyebrow { color: #7fd8cf; font-size: 13px; letter-spacing: 0.08em; margin: 0 0 16px; }
+.login-hero h1 { font-size: 34px; line-height: 1.28; margin: 0 0 18px; color: #fff; font-weight: 700; }
+.login-hero-sub { color: #b9ccca; font-size: 14px; line-height: 1.75; margin: 0 0 22px; }
+.login-hero-points { list-style: none; padding: 0; margin: 0; display: flex; flex-wrap: wrap; gap: 10px 18px; color: #cfe6e2; font-size: 13px; }
+.login-hero-points li::before { content: "\2713"; color: #40e0d0; margin-right: 6px; }
+.login-hero-foot { color: #6f8785; font-size: 12px; z-index: 1; }
+.login-panel { display: flex; align-items: center; justify-content: center; padding: 32px; }
+.login-card { width: min(400px, 100%); display: flex; flex-direction: column; gap: 16px; padding: 32px 30px; border: 1px solid #e6e9ea; border-radius: 18px; background: #fff; box-shadow: 0 24px 60px rgba(16,32,40,0.08); }
+.login-head { display: flex; align-items: center; gap: 12px; }
+.login-head h2 { margin: 0; font-size: 19px; color: #1b1f22; }
+.login-head p { margin: 2px 0 0; font-size: 12px; color: #6b7478; }
+.login-banner { padding: 9px 12px; border-radius: 9px; background: rgba(224,168,0,0.12); color: #8a6d00; font-size: 12.5px; }
+.login-field { display: flex; flex-direction: column; gap: 7px; font-size: 12px; color: #6b7478; }
+.login-input { display: flex; align-items: center; gap: 8px; height: 44px; padding: 0 12px; border: 1px solid #cfd6d8; border-radius: 11px; background: #fff; transition: border-color .15s, box-shadow .15s; }
+.login-input:focus-within { border-color: #0aa; box-shadow: 0 0 0 3px rgba(0,128,128,0.12); }
+.login-input-icon { color: #9aa2a6; display: inline-flex; }
+.login-input input { flex: 1; min-width: 0; height: 100%; border: none; outline: none; font-size: 14px; color: #1b1f22; background: transparent; }
+.login-eye { border: none; background: none; color: #9aa2a6; cursor: pointer; display: inline-flex; padding: 4px; }
+.login-eye:hover { color: #1b1f22; }
+.login-error { display: flex; align-items: center; gap: 7px; margin: 0; color: #c0392b; font-size: 12.5px; }
+.login-submit { display: inline-flex; align-items: center; justify-content: center; gap: 8px; height: 46px; border: none; border-radius: 12px; background: #171b1e; color: #fff; font-size: 14px; font-weight: 600; cursor: pointer; transition: background .15s, opacity .15s; }
+.login-submit:hover { background: #000; }
+.login-submit:disabled { opacity: 0.7; cursor: default; }
+.login-spinner { width: 16px; height: 16px; border: 2px solid rgba(255,255,255,0.4); border-top-color: #fff; border-radius: 50%; animation: spin 0.8s linear infinite; }
+.login-shell-loading .login-spinner { border-color: rgba(0,0,0,0.15); border-top-color: #0aa; width: 22px; height: 22px; }
+.login-hint { margin: 0; color: #9aa2a6; font-size: 11.5px; text-align: center; }
+@media (max-width: 860px) {
+  .login-shell { grid-template-columns: 1fr; }
+  .login-hero { padding: 26px 24px 22px; }
+  .login-hero h1 { font-size: 24px; }
+  .login-hero-sub, .login-hero-points { display: none; }
+  .login-hero-foot { margin-top: 10px; }
+  .login-panel { padding: 24px 16px; }
+  .login-card { padding: 24px 20px; }
+}
+
+/* ============================================================ 用户菜单 */
+.usermenu { position: relative; }
+.usermenu-trigger { display: inline-flex; align-items: center; gap: 7px; border: 1px solid #e6e9ea; background: #fff; border-radius: 999px; padding: 4px 10px 4px 5px; cursor: pointer; color: #1b1f22; font-size: 12px; }
+.usermenu-avatar { width: 24px; height: 24px; border-radius: 50%; background: #171b1e; color: #fff; display: inline-flex; align-items: center; justify-content: center; font-size: 12px; font-weight: 600; }
+.usermenu-avatar.lg { width: 34px; height: 34px; font-size: 15px; }
+.usermenu-name { max-width: 110px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.usermenu-caret { color: #6b7478; font-size: 10px; }
+.usermenu-pop { position: absolute; right: 0; top: calc(100% + 8px); width: 200px; background: #fff; border: 1px solid #e6e9ea; border-radius: 12px; box-shadow: 0 16px 40px rgba(16,32,40,0.16); padding: 6px; z-index: 70; }
+.usermenu-head { display: flex; align-items: center; gap: 10px; padding: 8px 8px 10px; border-bottom: 1px solid #e6e9ea; margin-bottom: 4px; }
+.usermenu-head-name { font-size: 13px; font-weight: 600; color: #1b1f22; }
+.usermenu-head-role { font-size: 11px; color: #6b7478; }
+.usermenu-item { display: block; width: 100%; text-align: left; border: none; background: none; padding: 9px 10px; border-radius: 8px; font-size: 13px; color: #1b1f22; cursor: pointer; }
+.usermenu-item:hover { background: #f1f5f6; }
+.usermenu-item.danger { color: #c0392b; }
+
+/* ============================================================ 弹窗（改密 / 管理确认） */
+.small-modal { width: min(440px, 96vw); }
+.modal-body { padding: 18px; }
+.modal-form { display: flex; flex-direction: column; gap: 12px; }
+.modal-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 6px; }
+.modal-success { display: flex; flex-direction: column; gap: 14px; padding: 8px 4px; color: #1b1f22; font-size: 13px; }
+.adminviewer { position: relative; }
+.admin-dialog-overlay { position: absolute; inset: 0; background: rgba(17,23,26,0.45); display: flex; align-items: center; justify-content: center; z-index: 5; }
+.admin-dialog { width: min(380px, 90%); background: #fff; border-radius: 12px; padding: 18px; display: flex; flex-direction: column; gap: 12px; box-shadow: 0 16px 50px rgba(0,0,0,0.3); }
+.admin-dialog h4 { margin: 0; font-size: 14px; color: #1b1f22; }
+.admin-dialog input { height: 38px; padding: 0 10px; border: 1px solid #cfd6d8; border-radius: 9px; font-size: 13px; }
+.admin-avatar { width: 26px; height: 26px; border-radius: 50%; background: #eef4f5; color: #0aa; display: inline-flex; align-items: center; justify-content: center; font-size: 12px; font-weight: 600; }

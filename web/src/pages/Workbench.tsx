@@ -12,11 +12,13 @@ import type {
 import { AdminPanel } from "../components/AdminPanel";
 import { AnswerCard } from "../components/AnswerCard";
 import { BottomSheet } from "../components/BottomSheet";
+import { ChangePasswordModal } from "../components/ChangePasswordModal";
 import { CheckList } from "../components/CheckList";
 import { Composer } from "../components/Composer";
 import { DocRail } from "../components/DocRail";
 import { DocViewer } from "../components/DocViewer";
 import { EvidencePanel } from "../components/EvidencePanel";
+import { UserMenu } from "../components/UserMenu";
 import {
   BrandMark,
   ChatIcon,
@@ -193,6 +195,7 @@ export function Workbench({ user, onNavigateHome, onLogout }: WorkbenchProps) {
     null,
   );
   const [adminOpen, setAdminOpen] = useState(false);
+  const [changePwOpen, setChangePwOpen] = useState(false);
 
   const composerRef = useRef<HTMLInputElement>(null);
   const fileRef = useRef<HTMLInputElement>(null);
@@ -476,13 +479,11 @@ export function Workbench({ user, onNavigateHome, onLogout }: WorkbenchProps) {
           </span>
           <span className="wb-domain">{status?.domain ?? "standard"}</span>
           {statusLoading ? <span className="wb-refreshing">刷新中…</span> : null}
-          <span className="wb-user" title={`${user.username}（${user.role === "admin" ? "管理员" : "普通用户"}）`}>
-            {user.username}
-            {user.role === "admin" ? <span className="wb-user-role">管理员</span> : null}
-          </span>
-          <button type="button" className="wb-logout" onClick={onLogout}>
-            退出
-          </button>
+          <UserMenu
+            user={user}
+            onChangePassword={() => setChangePwOpen(true)}
+            onLogout={onLogout}
+          />
         </div>
         <div className="wb-top-actions">
           {user.role === "admin" ? (
@@ -725,6 +726,8 @@ export function Workbench({ user, onNavigateHome, onLogout }: WorkbenchProps) {
         currentUser={user}
         onClose={() => setAdminOpen(false)}
       />
+
+      <ChangePasswordModal open={changePwOpen} onClose={() => setChangePwOpen(false)} />
     </div>
   );
 }

@@ -10,6 +10,7 @@ export function App() {
   const { path, navigate } = useRoute();
   // undefined = 正在确认登录态；null = 未登录；AuthUser = 已登录
   const [auth, setAuth] = useState<AuthUser | null | undefined>(undefined);
+  const [expired, setExpired] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
@@ -31,18 +32,35 @@ export function App() {
     };
   }, []);
 
+  // 任何接口返回 401（会话过期）都退回登录页并提示。
+  useEffect(() => {
+    const onUnauthorized = () => {
+      setExpired(true);
+      setAuth(null);
+    };
+    window.addEventListener("docqa:unauthorized", onUnauthorized);
+    return () => window.removeEventListener("docqa:unauthorized", onUnauthorized);
+  }, []);
+
   if (auth === undefined) {
     return (
-      <div className="login-page">
-        <div className="login-card">
-          <p className="login-sub">正在确认登录状态…</p>
-        </div>
+      <div className="login-shell login-shell-loading">
+        <div className="login-spinner" aria-hidden="true" />
+        <p>正在确认登录状态…</p>
       </div>
     );
   }
 
   if (auth === null) {
-    return <Login onSuccess={setAuth} />;
+    return (
+      <Login
+        expired={expired}
+        onSuccess={(u) => {
+          setExpired(false);
+          setAuth(u);
+        }}
+      />
+    );
   }
 
   const isWorkbench = path === "/app" || path.startsWith("/app/");
@@ -55,6 +73,7 @@ export function App() {
           try {
             await api.logout();
           } finally {
+            setExpired(false);
             setAuth(null);
             navigate("/");
           }

@@ -36,6 +36,14 @@ async function request<T>(url: string, init?: RequestInit): Promise<T> {
     }
   }
   if (!response.ok) {
+    // 会话过期：除了登录接口本身，其它 401 统一广播，前端据此退回登录页。
+    if (
+      response.status === 401 &&
+      !url.startsWith("/api/auth/login") &&
+      !url.startsWith("/api/auth/me")
+    ) {
+      window.dispatchEvent(new CustomEvent("docqa:unauthorized"));
+    }
     throw new Error(
       messageFromPayload(payload, text || `请求失败（HTTP ${response.status}）`),
     );
@@ -143,6 +151,15 @@ export async function login(username: string, pw: string): Promise<MeResult> {
 
 export async function logout(): Promise<{ ok: boolean }> {
   return request<{ ok: boolean }>("/api/auth/logout", { method: "POST" });
+}
+
+/** 登录用户自助修改密码（需原密码）。 */
+export async function changePassword(oldPw: string, newPw: string): Promise<{ ok: boolean }> {
+  return request<{ ok: boolean }>("/api/auth/change-pw", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ old_pw: oldPw, new_pw: newPw }),
+  });
 }
 
 export interface UsersPayload {

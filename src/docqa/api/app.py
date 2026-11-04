@@ -362,6 +362,11 @@ class CreateUserRequest(BaseModel):
     role: Literal["user", "admin"] = "user"
 
 
+class ChangePwRequest(BaseModel):
+    old_pw: str
+    new_pw: str
+
+
 class UpdateUserRequest(BaseModel):
     role: Literal["user", "admin"] | None = None
     pw: str | None = None
@@ -1185,6 +1190,21 @@ def create_app(cfg: Config, *, domain: str = "standard") -> FastAPI:
         return JSONResponse(
             {"authenticated": True, "username": u.get("username"), "role": u.get("role")}
         )
+
+    @app.post("/api/auth/change-pw")
+    def change_pw(req: ChangePwRequest) -> JSONResponse:
+        """已登录用户自助修改密码（需验证原密码）。"""
+        u = current_user() or {}
+        name = u.get("username")
+        if not name:
+            raise HTTPException(401, "未登录")
+        if not users.verify(name, req.old_pw or ""):
+            raise HTTPException(400, "原密码不正确")
+        try:
+            users.set_pw(name, req.new_pw or "")
+        except AuthError as exc:
+            raise HTTPException(400, str(exc)) from None
+        return JSONResponse({"ok": True})
 
     # ---------------------------------------------------------------- 管理员
     @app.get("/api/admin/users")

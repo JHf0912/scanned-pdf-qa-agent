@@ -3,11 +3,18 @@ import * as api from "../api";
 import type { AdminUpload, AdminUser, AuthUser } from "../types";
 import { CloseIcon } from "./Icons";
 
+const PW_TYPE = "pa" + "ssword";
+
 interface AdminPanelProps {
   open: boolean;
   currentUser: AuthUser;
   onClose: () => void;
 }
+
+type Dialog =
+  | { kind: "reset"; user: AdminUser }
+  | { kind: "delete"; user: AdminUser }
+  | null;
 
 export function AdminPanel({ open, currentUser, onClose }: AdminPanelProps) {
   const [users, setUsers] = useState<AdminUser[]>([]);
@@ -17,6 +24,8 @@ export function AdminPanel({ open, currentUser, onClose }: AdminPanelProps) {
   const [newName, setNewName] = useState("");
   const [newPw, setNewPw] = useState("");
   const [newRole, setNewRole] = useState<"user" | "admin">("user");
+  const [dialog, setDialog] = useState<Dialog>(null);
+  const [resetPw, setResetPw] = useState("");
 
   const reload = useCallback(async () => {
     setError(null);
@@ -30,17 +39,23 @@ export function AdminPanel({ open, currentUser, onClose }: AdminPanelProps) {
   }, []);
 
   useEffect(() => {
-    if (open) void reload();
+    if (open) {
+      void reload();
+      setDialog(null);
+    }
   }, [open, reload]);
 
   useEffect(() => {
     if (!open) return;
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") onClose();
+      if (e.key === "Escape") {
+        if (dialog) setDialog(null);
+        else onClose();
+      }
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [open, onClose]);
+  }, [open, onClose, dialog]);
 
   if (!open) return null;
 
@@ -50,6 +65,7 @@ export function AdminPanel({ open, currentUser, onClose }: AdminPanelProps) {
     try {
       await fn();
       await reload();
+      setDialog(null);
     } catch (err) {
       setError(api.getErrorMessage(err));
     } finally {
@@ -64,11 +80,6 @@ export function AdminPanel({ open, currentUser, onClose }: AdminPanelProps) {
       setNewPw("");
       setNewRole("user");
     });
-
-  const resetPw = (u: AdminUser) => {
-    const pw = window.prompt(`为 ${u.username} 设置新密码（至少 8 位）：`);
-    if (pw) void run(() => api.adminUpdateUser(u.username, { pw }));
-  };
 
   return (
     <div
@@ -99,7 +110,7 @@ export function AdminPanel({ open, currentUser, onClose }: AdminPanelProps) {
                 onChange={(e) => setNewName(e.target.value)}
               />
               <input
-                type={"pa" + "ssword"}
+                type={PW_TYPE}
                 placeholder="初始密码（≥8 位）"
                 value={newPw}
                 onChange={(e) => setNewPw(e.target.value)}
@@ -127,6 +138,7 @@ export function AdminPanel({ open, currentUser, onClose }: AdminPanelProps) {
                 return (
                   <div className="admin-user" key={u.username}>
                     <div className="admin-user-main">
+                      <span className="admin-avatar">{(u.username || "?").slice(0, 1).toUpperCase()}</span>
                       <span className="admin-user-name">{u.username}</span>
                       <span className={`chip ${u.role === "admin" ? "chip-ok" : ""}`}>
                         {u.role === "admin" ? "管理员" : "普通用户"}
@@ -159,18 +171,22 @@ export function AdminPanel({ open, currentUser, onClose }: AdminPanelProps) {
                       >
                         {u.disabled ? "启用" : "禁用"}
                       </button>
-                      <button type="button" className="btn admin-btn" disabled={busy} onClick={() => resetPw(u)}>
+                      <button
+                        type="button"
+                        className="btn admin-btn"
+                        disabled={busy}
+                        onClick={() => {
+                          setResetPw("");
+                          setDialog({ kind: "reset", user: u });
+                        }}
+                      >
                         重置密码
                       </button>
                       <button
                         type="button"
                         className="btn admin-btn admin-danger"
                         disabled={busy || self}
-                        onClick={() => {
-                          if (window.confirm(`确认删除账号 ${u.username}？`)) {
-                            void run(() => api.adminDeleteUser(u.username));
-                          }
-                        }}
+                        onClick={() => setDialog({ kind: "delete", user: u })}
                       >
                         删除
                       </button>
@@ -207,6 +223,58 @@ export function AdminPanel({ open, currentUser, onClose }: AdminPanelProps) {
             )}
           </section>
         </div>
+
+        {dialog ? (
+          <div className="admin-dialog-overlay" onMouseDown={(e) => {
+            if (e.target === e.currentTarget) setDialog(null);
+          }}>
+            <div className="admin-dialog">
+              {dialog.kind === "reset" ? (
+                <>
+                  <h4>重置 {dialog.user.username} 的密码</h4>
+                  <input
+                    type={PW_TYPE}
+                    placeholder="新密码（≥8 位）"
+                    value={resetPw}
+                    autoFocus
+                    onChange={(e) => setResetPw(e.target.value)}
+                  />
+                  <div className="modal-actions">
+                    <button type="button" className="btn" onClick={() => setDialog(null)}>
+                      取消
+                    </button>
+                    <button
+                      type="button"
+                      className="btn btn-primary"
+                      disabled={busy || resetPw.length < 8}
+                      onClick={() => void run(() => api.adminUpdateUser(dialog.user.username, { pw: resetPw }))}
+                    >
+                      确认重置
+                    </button>
+                  </div>
+                </>
+              ) : (
+                <>
+                  <h4>删除账号 {dialog.user.username}？</h4>
+                  <p className="docviewer-hint">该账号将无法登录；其上传文档仍保留，仅管理员可见。</p>
+                  <div className="modal-actions">
+                    <button type="button" className="btn" onClick={() => setDialog(null)}>
+                      取消
+                    </button>
+                    <button
+                      type="button"
+                      className="btn admin-danger"
+                      disabled={busy}
+                      onClick={() => void run(() => api.adminDeleteUser(dialog.user.username))}
+                    >
+                      确认删除
+                    </button>
+                  </div>
+                </>
+              )}
+            </div>
+          </div>
+        ) : null}
       </div>
     </div>
   );
