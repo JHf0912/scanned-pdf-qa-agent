@@ -13,10 +13,12 @@ import { BottomSheet } from "../components/BottomSheet";
 import { CheckList } from "../components/CheckList";
 import { Composer } from "../components/Composer";
 import { DocRail } from "../components/DocRail";
+import { DocViewer } from "../components/DocViewer";
 import { EvidencePanel } from "../components/EvidencePanel";
 import {
   BrandMark,
   ChatIcon,
+  DocIcon,
   LayersIcon,
   RefreshIcon,
   UploadIcon,
@@ -182,6 +184,10 @@ export function Workbench({ onNavigateHome }: WorkbenchProps) {
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [activeCitation, setActiveCitation] = useState<string | null>(null);
   const [answerMode, setAnswerMode] = useState<AnswerMode>(readStoredAnswerMode);
+  // 原文浏览：{docId, title, page}；null = 关闭。
+  const [viewer, setViewer] = useState<{ docId: string; title: string; page: number | null } | null>(
+    null,
+  );
 
   const composerRef = useRef<HTMLInputElement>(null);
   const fileRef = useRef<HTMLInputElement>(null);
@@ -477,6 +483,19 @@ export function Workbench({ onNavigateHome }: WorkbenchProps) {
           </button>
           <button
             type="button"
+            className="btn wb-open-doc"
+            title="打开原始文档浏览"
+            disabled={!ready || currentDocIds.length === 0}
+            onClick={() =>
+              status?.doc_id &&
+              setViewer({ docId: status.doc_id, title: status.doc_id, page: null })
+            }
+          >
+            <DocIcon size={15} />
+            <span>浏览原文</span>
+          </button>
+          <button
+            type="button"
             className="icon-btn"
             aria-label="重新扫描产物"
             title="重新扫描 data/derived 下的产物"
@@ -608,6 +627,10 @@ export function Workbench({ onNavigateHome }: WorkbenchProps) {
               evidence={evidence}
               activeChunkId={activeCitation}
               onSelect={handleCitation}
+              onOpenPage={(pageNo) =>
+                status?.doc_id &&
+                setViewer({ docId: status.doc_id, title: status.doc_id, page: pageNo })
+              }
             />
           </section>
           <section className="side-section">
@@ -666,6 +689,14 @@ export function Workbench({ onNavigateHome }: WorkbenchProps) {
           </section>
         </div>
       </BottomSheet>
+
+      <DocViewer
+        open={viewer !== null}
+        docId={viewer?.docId ?? ""}
+        docTitle={viewer?.title ?? ""}
+        page={viewer?.page ?? null}
+        onClose={() => setViewer(null)}
+      />
     </div>
   );
 }

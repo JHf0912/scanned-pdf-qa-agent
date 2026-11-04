@@ -31,18 +31,32 @@ function PageSnapshot({
   src,
   alt,
   bboxes,
+  onOpen,
 }: {
   src: string;
   alt: string;
   bboxes: BBox[];
+  onOpen?: () => void;
 }) {
   return (
-    <span className="evidence-page">
+    <span
+      className={`evidence-page${onOpen ? " is-openable" : ""}`}
+      onClick={
+        onOpen
+          ? (event) => {
+              event.stopPropagation();
+              onOpen();
+            }
+          : undefined
+      }
+    >
       <span className="evidence-page-inner">
         <img src={src} alt={alt} loading="lazy" decoding="async" />
         <BBoxLayer bboxes={bboxes} />
       </span>
-      <span className="evidence-page-cap">页图 · 引用位置已高亮</span>
+      <span className="evidence-page-cap">
+        页图 · 引用位置已高亮{onOpen ? " · 点击查看原文档" : ""}
+      </span>
     </span>
   );
 }
@@ -54,6 +68,8 @@ interface EvidencePanelProps {
   evidence: Record<string, EvidenceText>;
   activeChunkId: string | null;
   onSelect: (chunkId: string) => void;
+  /** 打开原文并定位到某页（可选）。 */
+  onOpenPage?: (pageNo: number) => void;
 }
 
 interface EvidenceItem {
@@ -121,6 +137,7 @@ export function EvidencePanel({
   evidence,
   activeChunkId,
   onSelect,
+  onOpenPage,
 }: EvidencePanelProps) {
   const items = useMemo(
     () => buildItems(chunks, hits, citations, evidence),
@@ -193,6 +210,11 @@ export function EvidencePanel({
                 src={pageImage.url}
                 alt={`第 ${chunk.page_no ?? ""} 页`}
                 bboxes={bboxes}
+                onOpen={
+                  onOpenPage && chunk.page_no != null
+                    ? () => onOpenPage(chunk.page_no as number)
+                    : undefined
+                }
               />
             ) : null}
             <span className="evidence-text">

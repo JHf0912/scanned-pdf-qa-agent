@@ -132,6 +132,28 @@ export interface PageImageInfo {
   height: number | null;
 }
 
+export interface DocPage {
+  page_no: number;
+  url: string;
+  width: number | null;
+  height: number | null;
+}
+
+export interface DocUnit {
+  locator: string;
+  text: string;
+}
+
+/** 一份文档的可浏览描述（GET /api/document）。 */
+export interface DocumentInfo {
+  doc_id: string;
+  source_type: string;
+  page_count: number;
+  pdf_url: string | null;
+  pages: DocPage[];
+  units: DocUnit[];
+}
+
 export type AnswerMode = "strict" | "hybrid";
 
 export interface AskResponse {

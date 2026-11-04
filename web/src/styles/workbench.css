@@ -1743,3 +1743,162 @@
     transform: translateX(0);
   }
 }
+
+/* ---------------------------------------------------------------- 原文浏览 */
+
+.docviewer-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 2vh 2vw;
+  background: rgba(17, 23, 26, 0.55);
+}
+
+.docviewer {
+  display: flex;
+  flex-direction: column;
+  width: min(1200px, 96vw);
+  height: min(92vh, 1000px);
+  overflow: hidden;
+  border-radius: 14px;
+  background: #fff;
+  box-shadow: 0 24px 80px rgba(0, 0, 0, 0.35);
+}
+
+.docviewer-top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 14px;
+  border-bottom: 1px solid var(--line);
+}
+
+.docviewer-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  color: var(--ink);
+  font-weight: 600;
+}
+
+.docviewer-name {
+  max-width: 52vw;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.docviewer-sub {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 400;
+}
+
+.docviewer-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.docviewer-open {
+  font-size: 12px;
+  text-decoration: none;
+}
+
+.docviewer-body {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  background: #f4f6f7;
+}
+
+.docviewer-frame {
+  display: block;
+  width: 100%;
+  height: 100%;
+  border: 0;
+  background: #fff;
+}
+
+.docviewer-msg {
+  padding: 40px;
+  color: var(--muted);
+  text-align: center;
+}
+
+.docviewer-text {
+  max-width: 820px;
+  margin: 0 auto;
+  padding: 16px 18px;
+}
+
+.docviewer-hint {
+  margin-bottom: 12px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.docviewer-unit {
+  display: flex;
+  gap: 10px;
+  padding: 8px 0;
+  border-bottom: 1px dashed var(--line);
+}
+
+.docviewer-loc {
+  min-width: 64px;
+  color: var(--muted);
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+.docviewer-unit p {
+  margin: 0;
+  color: var(--ink);
+  font-size: 13px;
+  line-height: 1.7;
+}
+
+.docviewer-pages {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.docviewer-pages figure {
+  margin: 0;
+  text-align: center;
+}
+
+.docviewer-pages img {
+  max-width: 100%;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+}
+
+.docviewer-pages figcaption {
+  margin-top: 4px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.evidence-page.is-openable {
+  cursor: zoom-in;
+}
+
+@media (max-width: 767px) {
+  .docviewer {
+    width: 100vw;
+    height: 100vh;
+    border-radius: 0;
+  }
+
+  .docviewer-name {
+    max-width: 60vw;
+  }
+}

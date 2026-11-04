@@ -3,6 +3,7 @@ import type {
   AskResponse,
   Chunk,
   DocInfo,
+  DocumentInfo,
   Status,
   UploadResult,
 } from "./types";
@@ -65,6 +66,11 @@ export async function selectDocs(
 
 export async function getChunks(): Promise<Chunk[]> {
   return request<Chunk[]>("/api/chunks");
+}
+
+/** 取某份文档的可浏览描述（PDF 地址 / 页图 / DOCX 段落）。 */
+export async function getDocument(docId: string): Promise<DocumentInfo> {
+  return request<DocumentInfo>(`/api/document?doc_id=${encodeURIComponent(docId)}`);
 }
 
 export async function uploadDocument(file: File): Promise<UploadResult> {

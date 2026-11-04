@@ -606,6 +606,106 @@ def create_app(cfg: Config, *, domain: str = "standard") -> FastAPI:
             path, media_type=media, headers={"Cache-Control": "public, max-age=3600"}
         )
 
+    # ---------------------------------------------------------------- 原文浏览
+
+    def _source_pdf(d: Path) -> Path | None:
+        """从 manifest 的 `source.path` 取原始 PDF（若存在且确为 PDF）。"""
+        try:
+            data = json.loads((d / "manifest.json").read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            return None
+        raw = (data.get("source") or {}).get("path")
+        if not raw:
+            return None
+        p = Path(str(raw))
+        if p.suffix.lower() != ".pdf" or not p.is_file():
+            return None
+        return p
+
+    @app.get("/api/pdf")
+    def source_pdf(doc_id: str) -> FileResponse:
+        """返回原始 PDF，供前端内嵌阅读器整份浏览（可滚动/缩放/跳页）。
+
+        只服务**本工具自己 ingest 的产物对应的源文件**：`doc_id` 必须能在
+        `_discover()` 里找到，路径取自该产物的 manifest。DOCX 没有 PDF → 404。
+        """
+        d = _dir_for(doc_id)
+        if d is None:
+            raise HTTPException(404, "找不到该文档产物")
+        path = _source_pdf(d)
+        if path is None:
+            raise HTTPException(404, "该文档没有可浏览的 PDF 源文件")
+        return FileResponse(
+            path,
+            media_type="application/pdf",
+            headers={
+                "Content-Disposition": "inline",
+                "Cache-Control": "public, max-age=3600",
+            },
+        )
+
+    @app.get("/api/document")
+    def document(doc_id: str) -> JSONResponse:
+        """一份文档的"可浏览"描述：PDF 地址 / 页图列表 / DOCX 段落文本。
+
+        前端用它决定怎么展示原文：有 PDF 用内嵌阅读器；没有 PDF（DOCX）就
+        按段落列出解析文本；扫描页还可逐页看页图。
+        """
+        d = _dir_for(doc_id)
+        if d is None:
+            raise HTTPException(404, "找不到该文档产物")
+        try:
+            data = json.loads((d / "manifest.json").read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            raise HTTPException(404, "产物清单不可读") from None
+        real_id = data.get("doc_id") or doc_id
+        src = data.get("source") or {}
+        src_path = str(src.get("path") or "")
+        source_type = src.get("source_type") or (
+            "docx" if src_path.lower().endswith(".docx") else "pdf"
+        )
+        images = (data.get("render") or {}).get("images") or []
+        pages = [
+            {
+                "page_no": im["page_no"],
+                "url": f"/api/page-image?doc_id={quote(real_id)}&page_no={im['page_no']}",
+                "width": im.get("width"),
+                "height": im.get("height"),
+            }
+            for im in images
+            if im.get("page_no") is not None
+        ]
+        pdf_available = source_type != "docx" and _source_pdf(d) is not None
+        units: list[dict] = []
+        if source_type == "docx":
+            cj = d / "chunks.jsonl"
+            if cj.exists():
+                for line in cj.open(encoding="utf-8"):
+                    if not line.strip():
+                        continue
+                    c = json.loads(line)
+                    sec = c.get("section")
+                    para = c.get("para_no")
+                    if sec and para is not None:
+                        loc = f"§{sec} ¶{para}"
+                    elif para is not None:
+                        loc = f"¶{para}"
+                    elif sec:
+                        loc = f"§{sec}"
+                    else:
+                        loc = f"片段 {c.get('ordinal')}"
+                    units.append({"locator": loc, "text": c.get("text") or ""})
+        return JSONResponse(
+            {
+                "doc_id": real_id,
+                "source_type": source_type,
+                "page_count": len(pages) or int(src.get("page_count") or 0),
+                "pdf_url": f"/api/pdf?doc_id={quote(real_id)}" if pdf_available else None,
+                "pages": pages,
+                "units": units,
+            }
+        )
+
     # ---------------------------------------------------------------- 上传
 
     async def _upload_impl(request: Request) -> JSONResponse:
