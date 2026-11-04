@@ -6,6 +6,7 @@ import type {
   AuthUser,
   BottomSheetKind,
   Chunk,
+  DocInfo,
   Status,
   WorkbenchPanel,
 } from "../types";
@@ -22,7 +23,6 @@ import { UserMenu } from "../components/UserMenu";
 import {
   BrandMark,
   ChatIcon,
-  DocIcon,
   LayersIcon,
   RefreshIcon,
   UploadIcon,
@@ -63,9 +63,8 @@ const ANSWER_MODE_STORAGE_KEY = "docqa.answerMode";
 /** 同步读取，保证首屏直接渲染记住的模式，不出现 strict → hybrid 闪烁。 */
 function readStoredAnswerMode(): AnswerMode {
   try {
-    return window.localStorage.getItem(ANSWER_MODE_STORAGE_KEY) === "hybrid"
-      ? "hybrid"
-      : "strict";
+    const stored = window.localStorage.getItem(ANSWER_MODE_STORAGE_KEY);
+    return stored === "hybrid" || stored === "free" ? stored : "strict";
   } catch {
     return "strict";
   }
@@ -309,7 +308,7 @@ export function Workbench({ user, onNavigateHome, onLogout }: WorkbenchProps) {
 
   const handleModeChange = useCallback(
     (next: AnswerMode) => {
-      if (next === "hybrid" && !hasLlm) return;
+      if (next !== "strict" && !hasLlm) return;
       setAnswerMode(next);
       storeAnswerMode(next);
     },
@@ -431,6 +430,11 @@ export function Workbench({ user, onNavigateHome, onLogout }: WorkbenchProps) {
     composerRef.current?.focus();
   };
 
+  // 文档行「预览」：直接打开该文档原文，不改变当前选中/提问。
+  const handlePreview = useCallback((doc: DocInfo) => {
+    setViewer({ docId: doc.doc_id, title: doc.doc_id, page: null });
+  }, []);
+
   if (statusLoading && !status) return <WorkbenchSkeleton />;
 
   if (statusError && !status) {
@@ -506,19 +510,6 @@ export function Workbench({ user, onNavigateHome, onLogout }: WorkbenchProps) {
           </button>
           <button
             type="button"
-            className="btn wb-open-doc"
-            title="打开原始文档浏览"
-            disabled={!ready || currentDocIds.length === 0}
-            onClick={() =>
-              status?.doc_id &&
-              setViewer({ docId: status.doc_id, title: status.doc_id, page: null })
-            }
-          >
-            <DocIcon size={15} />
-            <span>浏览原文</span>
-          </button>
-          <button
-            type="button"
             className="icon-btn"
             aria-label="重新扫描产物"
             title="重新扫描 data/derived 下的产物"
@@ -560,6 +551,7 @@ export function Workbench({ user, onNavigateHome, onLogout }: WorkbenchProps) {
             uploading={uploading}
             uploadError={uploadError}
             onToggle={handleToggleDoc}
+            onPreview={handlePreview}
             onClear={() => void changeSelection([])}
             onRefresh={() => void refresh()}
             onUpload={(file) => void handleUpload(file)}

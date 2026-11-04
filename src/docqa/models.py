@@ -468,10 +468,11 @@ class RetrievalHit:
 # `strict`：答案只能来自检索到的证据，逐句引用——既有行为，也是默认。
 # `hybrid` ：文档能支持的内容仍逐句引用；文档没有的内容单独放在
 #            `【模型知识补充】` 段，禁止引用、禁止声称文档写了。
+# `free`   ：不受文档限制——不检索、不引用、不拒答，直接由生成模型自由作答。
 #
-# 这是一个**显式可选**的模式，不是默认降级：没有生成模型时 hybrid 不可用，
-# 绝不允许静默退回 strict（那会让界面写的模式和实际返回的模式对不上）。
-AnswerMode = Literal["strict", "hybrid"]
+# 这是一个**显式可选**的模式，不是默认降级：没有生成模型时 hybrid 与 free 都
+# 不可用，绝不允许静默退回 strict（那会让界面写的模式和实际返回的模式对不上）。
+AnswerMode = Literal["strict", "hybrid", "free"]
 
 # 引用渲染的默认模板。`citation_template` 在 domain profile 里可覆盖，
 # 由 `Citation.render(template=...)` 使用——模板是**场景配置**的一部分，

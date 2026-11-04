@@ -42,6 +42,8 @@ from ..models import (
     VerificationReport,
 )
 from .answer import (
+    FREE_REQUIRES_LLM_MESSAGE,
+    FREE_SYSTEM_PROMPT,
     HYBRID_KNOWLEDGE_MARKER,
     HYBRID_REQUIRES_LLM_MESSAGE,
     Draft,
@@ -111,6 +113,56 @@ class QaAgent:
 
     def answer(self, question: str, mode: AnswerMode = "strict") -> AnswerBundle:
         validate_answer_mode(mode)
+
+        # --- free（自由回答）：不检索 / 不引用 / 不拒答 ----------------------
+        #
+        # free 是**完全脱离文档**的一条显式路径：不进入检索→起草→自检→修复
+        # 的主循环，直接由生成模型自由作答。它没有任何证据依据，所以 citations
+        # 恒为空、refused 恒为 False、verification 为空报告——不假装做过文档自检。
+        #
+        # 没有生成模型时它无从谈起（抽取式回答字面上就是证据，不是"自由作答"），
+        # 与 hybrid 一样明确报配置错误，**绝不静默降级**。
+        if mode == "free":
+            if self.provider.name == "null" or isinstance(self.provider, NullProvider):
+                raise ConfigError(FREE_REQUIRES_LLM_MESSAGE)
+            qa_cfg = self.profile.qa
+            started = time.perf_counter()
+            resp = self.provider.complete(
+                FREE_SYSTEM_PROMPT,
+                question,
+                max_tokens=qa_cfg.max_tokens,
+                temperature=qa_cfg.temperature,
+            )
+            bundle = AnswerBundle(
+                question=question,
+                answer=resp.text.strip(),
+                citations=[],
+                refused=False,
+                verification=VerificationReport(),
+                hits=[],
+                trace=[
+                    TraceStep(
+                        step="free",
+                        detail="自由回答：不检索/不引用/不拒答",
+                        usage=resp.usage,
+                    )
+                ],
+                usage=resp.usage,
+                attempts=1,
+                answer_mode="free",
+                citation_template=self.profile.citation_template,
+                docx_citation_template=self.profile.docx_citation_template,
+            )
+            _log.info(
+                "自由问答完成",
+                extra={
+                    "elapsed_ms": int((time.perf_counter() - started) * 1000),
+                    "detail": f"mode=free answer_chars={len(bundle.answer or '')}",
+                    "usage": resp.usage.to_dict(),
+                },
+            )
+            return bundle
+
         # hybrid 必须真的由生成模型作答。没有模型时明确报错，
         # **绝不静默降级成 strict**——那会让前端显示的模式与实际行为错位。
         if mode == "hybrid" and (

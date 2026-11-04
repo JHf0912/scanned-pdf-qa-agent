@@ -206,7 +206,8 @@ def run_verify(
 
 class TestAnswerModeModel:
     def test_answer_mode_literal_frozen(self):
-        assert get_args(AnswerMode) == ("strict", "hybrid")
+        # free 模式上线后（task-1），AnswerMode 扩为三值；strict/hybrid 仍是前两项。
+        assert get_args(AnswerMode) == ("strict", "hybrid", "free")
 
     def test_answer_bundle_defaults_to_strict(self):
         d = AnswerBundle(question="q", answer="a").to_dict()

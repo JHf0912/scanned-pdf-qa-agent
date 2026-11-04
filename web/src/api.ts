@@ -107,7 +107,12 @@ function normalizeAskResponse(payload: AskResponse): AskResponse {
       : null;
   return {
     ...payload,
-    answer_mode: payload.answer_mode === "hybrid" ? "hybrid" : "strict",
+    answer_mode:
+      payload.answer_mode === "hybrid"
+        ? "hybrid"
+        : payload.answer_mode === "free"
+          ? "free"
+          : "strict",
     model_knowledge: knowledge,
     knowledge_used: payload.knowledge_used === true && knowledge !== null,
   };

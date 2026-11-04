@@ -26,6 +26,11 @@ const OPTIONS: ModeOption[] = [
     label: "文档 + 模型知识",
     hint: "文档内容仍带引用；模型知识会单独标注",
   },
+  {
+    value: "free",
+    label: "自由回答",
+    hint: "不受文档限制，随意提问",
+  },
 ];
 
 export function ModeSwitch({ mode, onChange, hasLlm, busy }: ModeSwitchProps) {
@@ -33,24 +38,33 @@ export function ModeSwitch({ mode, onChange, hasLlm, busy }: ModeSwitchProps) {
   const optionRefs = useRef<Record<AnswerMode, HTMLButtonElement | null>>({
     strict: null,
     hybrid: null,
+    free: null,
   });
 
   const isDisabled = (value: AnswerMode): boolean =>
-    busy || (value === "hybrid" && !hasLlm);
+    busy || (value !== "strict" && !hasLlm);
 
   const select = (next: AnswerMode) => {
     if (next === mode || isDisabled(next)) return;
     onChange(next);
   };
 
-  // 两个选项的 ARIA radiogroup 用左右方向键切换并移动焦点；disabled 时停在原地。
+  // 三个选项的 ARIA radiogroup 用左右方向键循环切换并移动焦点；disabled 的选项跳过。
   const handleKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
     if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return;
     event.preventDefault();
-    const next: AnswerMode = mode === "strict" ? "hybrid" : "strict";
-    if (isDisabled(next)) return;
-    onChange(next);
-    optionRefs.current[next]?.focus();
+    const direction = event.key === "ArrowRight" ? 1 : -1;
+    const current = OPTIONS.findIndex((option) => option.value === mode);
+    for (let step = 1; step <= OPTIONS.length; step += 1) {
+      const index =
+        (((current + direction * step) % OPTIONS.length) + OPTIONS.length) %
+        OPTIONS.length;
+      const next = OPTIONS[index].value;
+      if (isDisabled(next)) continue;
+      onChange(next);
+      optionRefs.current[next]?.focus();
+      return;
+    }
   };
 
   return (
@@ -83,7 +97,7 @@ export function ModeSwitch({ mode, onChange, hasLlm, busy }: ModeSwitchProps) {
               aria-checked={selected}
               aria-disabled={disabled || undefined}
               aria-describedby={
-                option.value === "hybrid" && !hasLlm ? noteId : undefined
+                option.value !== "strict" && !hasLlm ? noteId : undefined
               }
               tabIndex={selected ? 0 : -1}
               disabled={disabled}
@@ -109,7 +123,7 @@ export function ModeSwitch({ mode, onChange, hasLlm, busy }: ModeSwitchProps) {
         <p
           className="mode-llm-note"
           id={noteId}
-          title="hybrid 需要配置 DOCQA_LLM_*"
+          title="hybrid / free 需要配置 DOCQA_LLM_*"
         >
           未配置生成模型
         </p>

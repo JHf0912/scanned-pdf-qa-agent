@@ -176,7 +176,7 @@ export interface AdminUpload {
   mtime?: number;
 }
 
-export type AnswerMode = "strict" | "hybrid";
+export type AnswerMode = "strict" | "hybrid" | "free";
 
 export interface AskResponse {
   question: string;

@@ -153,14 +153,42 @@ HYBRID_REQUIRES_LLM_MESSAGE = (
     "系统不会把 hybrid 静默降级为 strict。"
 )
 
-ANSWER_MODES: tuple[AnswerMode, ...] = ("strict", "hybrid")
+# ---------------------------------------------------------------- free 模式
+#
+# free（自由回答）不受文档限制：**不检索、不引用、不拒答**，直接由生成模型
+# 自由作答。它存在的意义是让"完全脱离文档的通用问答"成为一条显式路径，
+# 而不是让用户把问题硬塞进 strict/hybrid 后得到一堆拒答。
+#
+# 代价同样显式：答案没有任何文档依据，因此**不带引用、也不做自检/修复**。
+# 没有生成模型时它毫无意义（抽取式回答字面上就是证据，不是"自由作答"），
+# 所以与 hybrid 一样直接报配置错误，绝不静默降级。
+FREE_SYSTEM_PROMPT = """你是一个乐于助人的问答助手。请直接、自由地回答用户的问题。
+
+规则：
+1. 你可以使用自己的通用知识回答任何问题，不受文档限制。
+2. 保持**准确、简洁**，直接回答问题，不要复述问题。
+3. **不确定就说不确定**：不知道、没有把握或信息可能过时时，明确说明，
+   不要编造。
+4. **不要编造具体的数字、日期、名称、文号或出处**；没有可靠依据时给出
+   范围或说明「无法确定」，而不是猜一个看似精确的值。"""
+
+# free 但未配置生成模型时的统一提示。API/CLI/Agent 三处共用同一句话，
+# 避免出现"界面说配置错误、CLI 说别的"这种口径不一致。
+FREE_REQUIRES_LLM_MESSAGE = (
+    "free（自由回答）模式需要生成模型，但当前未配置。\n"
+    "请在 .env 中设置 DOCQA_LLM_PROVIDER / DOCQA_LLM_API_KEY / DOCQA_LLM_MODEL 后重试；"
+    "若不配置模型，请使用 strict（默认，仅依据文档证据作答）或 hybrid 模式。\n"
+    "系统不会把 free 静默降级为严格依据文档的模式。"
+)
+
+ANSWER_MODES: tuple[AnswerMode, ...] = ("strict", "hybrid", "free")
 
 
 def validate_answer_mode(mode: str) -> None:
-    """模式只接受 strict / hybrid。
+    """模式只接受 strict / hybrid / free。
 
     非法值必须在入口就报错，**绝不能落到某个默认分支**——否则调用方
-    以为自己在用 hybrid，实际拿到的却是 strict 的答案与字段。
+    以为自己在用 hybrid/free，实际拿到的却是 strict 的答案与字段。
     """
     if mode not in ANSWER_MODES:
         raise ValueError(
@@ -531,6 +559,10 @@ def draft_answer(
             hybrid 需要生成模型；没有模型时**报配置错误，绝不静默降级**。
     """
     validate_answer_mode(mode)
+    # free 模式由 QaAgent 直接作答（不检索、不经过 draft_answer）。这里显式拒绝，
+    # 避免将来有人把 free 传进来后静默落进 strict 的提示词分支。
+    if mode == "free":
+        raise ConfigError("free 模式由 QaAgent 直接作答，不应调用 draft_answer")
 
     # hybrid 的产物必须来自生成模型：抽取式答案字面上就是证据，
     # 没有"模型知识补充"可言。此时退回 strict 会让 API/前端显示的

@@ -26,12 +26,10 @@ interface LocatorSource {
 }
 
 function ModeChip({ mode }: { mode: AnswerMode }) {
-  const hybrid = mode === "hybrid";
-  return (
-    <span className={`answer-mode-chip${hybrid ? " is-hybrid" : ""}`}>
-      {hybrid ? "含模型知识" : "仅文档"}
-    </span>
-  );
+  const cls = mode === "hybrid" ? " is-hybrid" : mode === "free" ? " is-free" : "";
+  const label =
+    mode === "hybrid" ? "含模型知识" : mode === "free" ? "自由回答" : "仅文档";
+  return <span className={`answer-mode-chip${cls}`}>{label}</span>;
 }
 
 /**
@@ -93,7 +91,14 @@ export function AnswerCard({
   onOpenChecks,
   onCandidate,
 }: AnswerCardProps) {
-  const mode: AnswerMode = response.answer_mode === "hybrid" ? "hybrid" : "strict";
+  const mode: AnswerMode =
+    response.answer_mode === "hybrid"
+      ? "hybrid"
+      : response.answer_mode === "free"
+        ? "free"
+        : "strict";
+  // free 不受文档约束：不展示引用与模型知识区块，只呈现答案正文。
+  const isFree = mode === "free";
   const modelKnowledge =
     typeof response.model_knowledge === "string" && response.model_knowledge.trim()
       ? response.model_knowledge
@@ -166,27 +171,31 @@ export function AnswerCard({
         {mode === "hybrid" && response.knowledge_used ? (
           <span className="knowledge-badge">已用模型知识</span>
         ) : null}
-        <span
-          className={`chip ${response.verification.gates_passed ? "chip-ok" : "chip-bad"}`}
-        >
-          {response.verification.gates_passed ? (
-            <>
-              <CheckIcon size={12} />
-              门禁通过
-            </>
-          ) : (
-            <>
-              <AlertIcon size={12} />
-              {failedGates.length} 项未通过
-            </>
-          )}
-        </span>
+        {!isFree ? (
+          <span
+            className={`chip ${response.verification.gates_passed ? "chip-ok" : "chip-bad"}`}
+          >
+            {response.verification.gates_passed ? (
+              <>
+                <CheckIcon size={12} />
+                门禁通过
+              </>
+            ) : (
+              <>
+                <AlertIcon size={12} />
+                {failedGates.length} 项未通过
+              </>
+            )}
+          </span>
+        ) : null}
         <span className="answer-meta">
           {formatMs(response.server_elapsed_ms)} · {response.attempts} 次尝试
         </span>
       </header>
 
-      {hasAnswer ? (
+      {hasAnswer && isFree ? (
+        <div className="answer-text">{answer}</div>
+      ) : hasAnswer ? (
         <div className="answer-text">
           {segments.map((segment, index) => {
             if (segment.type !== "citation") {
@@ -213,7 +222,7 @@ export function AnswerCard({
             );
           })}
         </div>
-      ) : modelKnowledge ? (
+      ) : modelKnowledge && !isFree ? (
         <div className="answer-doc-empty">
           <InfoIcon size={16} />
           文档中未找到可引用的依据
@@ -225,27 +234,29 @@ export function AnswerCard({
         </div>
       )}
 
-      {response.citations.length > 0 ? (
-        <div className="answer-cites" aria-label="引用来源">
-          {response.citations.map((citation) => (
-            <button
-              key={`${citation.chunk_id}-${citation.rendered}`}
-              type="button"
-              className={`cite-chip${
-                citation.chunk_id === activeCitation ? " is-active" : ""
-              }`}
-              onClick={() => onCitation(citation.chunk_id)}
-              aria-label={`查看引用 ${citation.rendered}`}
-            >
-              {citation.rendered}
-            </button>
-          ))}
-        </div>
-      ) : (
-        <p className="answer-no-cites">这次回答没有引用任何片段。</p>
-      )}
+      {!isFree ? (
+        response.citations.length > 0 ? (
+          <div className="answer-cites" aria-label="引用来源">
+            {response.citations.map((citation) => (
+              <button
+                key={`${citation.chunk_id}-${citation.rendered}`}
+                type="button"
+                className={`cite-chip${
+                  citation.chunk_id === activeCitation ? " is-active" : ""
+                }`}
+                onClick={() => onCitation(citation.chunk_id)}
+                aria-label={`查看引用 ${citation.rendered}`}
+              >
+                {citation.rendered}
+              </button>
+            ))}
+          </div>
+        ) : (
+          <p className="answer-no-cites">这次回答没有引用任何片段。</p>
+        )
+      ) : null}
 
-      {modelKnowledge ? (
+      {modelKnowledge && !isFree ? (
         <section className="knowledge-block" aria-label="模型知识补充">
           <div className="knowledge-block-head">
             <InfoIcon size={14} />
@@ -266,15 +277,17 @@ export function AnswerCard({
         </div>
       ) : null}
 
-      <footer className="answer-foot">
-        <span className="chip chip-muted">
-          句级支撑度 {response.verification.support_score.toFixed(2)}（咨询性）
-        </span>
-        <button type="button" className="text-btn answer-checks-btn" onClick={onOpenChecks}>
-          查看逐项自检
-          <ArrowRightIcon size={13} />
-        </button>
-      </footer>
+      {!isFree ? (
+        <footer className="answer-foot">
+          <span className="chip chip-muted">
+            句级支撑度 {response.verification.support_score.toFixed(2)}（咨询性）
+          </span>
+          <button type="button" className="text-btn answer-checks-btn" onClick={onOpenChecks}>
+            查看逐项自检
+            <ArrowRightIcon size={13} />
+          </button>
+        </footer>
+      ) : null}
     </article>
   );
 }

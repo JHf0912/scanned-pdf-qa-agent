@@ -11,6 +11,7 @@ interface DocRailProps {
   uploading: boolean;
   uploadError: string | null;
   onToggle: (docId: string) => void;
+  onPreview: (doc: DocInfo) => void;
   onClear: () => void;
   onRefresh: () => void;
   onUpload: (file: File) => void;
@@ -49,6 +50,7 @@ export function DocRail({
   uploading,
   uploadError,
   onToggle,
+  onPreview,
   onClear,
   onRefresh,
   onUpload,
@@ -91,7 +93,7 @@ export function DocRail({
                 !isDocxSource(doc.source_type, doc.unit_count) &&
                 (doc.failed_pages ?? []).length > 0;
               return (
-                <li key={doc.doc_id}>
+                <li key={doc.doc_id} className="doc-row">
                   <button
                     type="button"
                     className={`doc-item${isOn ? " is-on" : ""}`}
@@ -111,6 +113,19 @@ export function DocRail({
                         </span>
                       ) : null}
                     </span>
+                  </button>
+                  {/* 预览按钮与选中按钮是兄弟节点，点击不会触发选中/提问。 */}
+                  <button
+                    type="button"
+                    className="doc-preview-btn"
+                    aria-label={`预览 ${docTitle(doc.doc_id)}`}
+                    title="直接预览该文档原文"
+                    onClick={(event) => {
+                      event.stopPropagation();
+                      onPreview(doc);
+                    }}
+                  >
+                    预览
                   </button>
                 </li>
               );

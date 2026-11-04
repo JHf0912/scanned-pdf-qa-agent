@@ -587,7 +587,10 @@ def _sanitize_bundle_dict(data: dict) -> dict:
 def _print_bundle(bundle: AnswerBundle) -> None:
     """统一的答案呈现。CLI 与 Web 用同一份 AnswerBundle，保证两者一致。"""
     # 模式来自**生成这条答案时**的 bundle，而不是当前开关：切换只影响下一问。
-    mode_label = "含模型知识" if bundle.answer_mode == "hybrid" else "仅文档"
+    mode_label = {
+        "hybrid": "含模型知识",
+        "free": "自由回答（不检索/不引用）",
+    }.get(bundle.answer_mode, "仅文档")
     console.print(f"[bold]模式：[/bold]{mode_label}")
 
     if bundle.refused:
@@ -679,7 +682,8 @@ def ask(
     domain: str = typer.Option("standard", "--domain", "-d"),
     mode: str = typer.Option(
         "strict", "--mode",
-        help="strict（仅文档，默认）/ hybrid（文档 + 模型知识；需配置生成模型）",
+        help="strict（仅文档，默认）/ hybrid（文档 + 模型知识；需生成模型）/ "
+             "free（自由回答，不检索/不引用/不拒答；需生成模型）",
     ),
     show_json: bool = typer.Option(False, "--json", help="输出结构化 JSON"),
 ) -> None:
@@ -688,11 +692,18 @@ def ask(
     `--mode hybrid` 会把"文档没有的内容"单独放进「模型知识补充」面板，
     并明确标注它不是文档证据；它需要生成模型，没有配置时直接报配置错误，
     **不会静默退回 strict**。
+
+    `--mode free` 完全脱离文档：不检索、不引用、不拒答，直接由生成模型自由
+    作答。它同样需要生成模型，没有配置时直接报配置错误。
     """
     from .llm import build_llm_provider
     from .pipeline import load_results
     from .qa import QaAgent
-    from .qa.answer import HYBRID_REQUIRES_LLM_MESSAGE, validate_answer_mode
+    from .qa.answer import (
+        FREE_REQUIRES_LLM_MESSAGE,
+        HYBRID_REQUIRES_LLM_MESSAGE,
+        validate_answer_mode,
+    )
 
     # 模式在入口就校验：非法值绝不能落到某个默认分支（那会让用户以为
     # 自己用的是 hybrid，实际拿到的是 strict 的答案与字段）。
@@ -706,6 +717,10 @@ def ask(
     if mode == "hybrid" and not cfg.has_llm:
         # 显式配置错误（退出码 2），不静默降级。
         _fail(ConfigError(HYBRID_REQUIRES_LLM_MESSAGE))
+        return
+    if mode == "free" and not cfg.has_llm:
+        # free 同样需要生成模型：没有模型时明确报配置错误，不静默降级。
+        _fail(ConfigError(FREE_REQUIRES_LLM_MESSAGE))
         return
     # 先校验场景名，再找产物。反过来的话，一个拼错的 --domain 会先报
     # "找不到已 ingest 的产物"，把人引去跑 ingest —— 而 ingest 同样会因为这个

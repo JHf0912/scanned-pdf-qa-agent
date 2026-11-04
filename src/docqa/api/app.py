@@ -64,7 +64,7 @@ from ..logging import get_logger
 from ..models import sanitize_display_text
 from ..pipeline import load_result, load_results
 from ..qa import QaAgent
-from ..qa.answer import HYBRID_REQUIRES_LLM_MESSAGE
+from ..qa.answer import FREE_REQUIRES_LLM_MESSAGE, HYBRID_REQUIRES_LLM_MESSAGE
 
 _log = get_logger("api")
 
@@ -342,9 +342,9 @@ def _sanitize_payload(payload: dict) -> dict:
 
 class AskRequest(BaseModel):
     question: str
-    # 回答范围模式。默认 strict（只依据文档证据）；hybrid 是显式可选路径，
-    # 不是"没模型时的降级"。非法值由 Pydantic 直接 422。
-    mode: Literal["strict", "hybrid"] = "strict"
+    # 回答范围模式。默认 strict（只依据文档证据）；hybrid 与 free 是显式可选
+    # 路径，不是"没模型时的降级"。非法值由 Pydantic 直接 422。
+    mode: Literal["strict", "hybrid", "free"] = "strict"
 
 
 class SelectRequest(BaseModel):
@@ -1102,6 +1102,11 @@ def create_app(cfg: Config, *, domain: str = "standard") -> FastAPI:
         # 成 strict——否则前端显示"文档 + 模型知识"，拿到的却是仅文档的答案。
         if req.mode == "hybrid" and not cfg.has_llm:
             raise HTTPException(400, HYBRID_REQUIRES_LLM_MESSAGE)
+
+        # free（自由回答）同样必须由生成模型作答。没有模型时明确 400，绝不静默
+        # 降级成 strict/hybrid——那会让界面写的模式与实际返回的模式错位。
+        if req.mode == "free" and not cfg.has_llm:
+            raise HTTPException(400, FREE_REQUIRES_LLM_MESSAGE)
 
         # 限流：超限立刻拒绝并说明原因，**不排队**——
         # 让用户等 30 秒再返回，他只会以为页面卡住了。
