@@ -2198,3 +2198,6 @@
 .admin-dialog h4 { margin: 0; font-size: 14px; color: #1b1f22; }
 .admin-dialog input { height: 38px; padding: 0 10px; border: 1px solid #cfd6d8; border-radius: 9px; font-size: 13px; }
 .admin-avatar { width: 26px; height: 26px; border-radius: 50%; background: #eef4f5; color: #0aa; display: inline-flex; align-items: center; justify-content: center; font-size: 12px; font-weight: 600; }
+
+.login-switch { margin: 0; text-align: center; font-size: 12.5px; color: #6b7478; }
+.login-switch button { border: none; background: none; color: #0aa; cursor: pointer; font: inherit; padding: 0 2px; text-decoration: underline; }

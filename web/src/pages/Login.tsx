@@ -5,6 +5,8 @@ import { AlertIcon, ArrowRightIcon, BrandMark } from "../components/Icons";
 
 const PW_TYPE = "pa" + "ssword";
 
+type Mode = "login" | "register";
+
 function UserGlyph() {
   return (
     <svg width={16} height={16} viewBox="0 0 24 24" fill="none" aria-hidden="true">
@@ -40,11 +42,21 @@ export function Login({
   onSuccess: (user: AuthUser) => void;
   expired?: boolean;
 }) {
+  const [mode, setMode] = useState<Mode>("login");
   const [username, setUsername] = useState("");
   const [pw, setPw] = useState("");
+  const [confirmPw, setConfirmPw] = useState("");
   const [showPw, setShowPw] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  const isRegister = mode === "register";
+
+  const switchMode = (next: Mode) => {
+    setMode(next);
+    setError(null);
+    setConfirmPw("");
+  };
 
   const submit = async (event: React.FormEvent) => {
     event.preventDefault();
@@ -53,14 +65,20 @@ export function Login({
       setError("请输入用户名和密码");
       return;
     }
+    if (isRegister && pw !== confirmPw) {
+      setError("两次输入的密码不一致");
+      return;
+    }
     setBusy(true);
     setError(null);
     try {
-      const r = await api.login(username.trim(), pw);
+      const r = isRegister
+        ? await api.register(username.trim(), pw)
+        : await api.login(username.trim(), pw);
       if (r.authenticated && r.username && r.role) {
         onSuccess({ username: r.username, role: r.role });
       } else {
-        setError("登录失败");
+        setError(isRegister ? "注册失败" : "登录失败");
       }
     } catch (err) {
       setError(api.getErrorMessage(err));
@@ -101,12 +119,12 @@ export function Login({
           <div className="login-head">
             <BrandMark size={30} />
             <div>
-              <h2>登录 docqa</h2>
-              <p>登录后使用文档问答工作台</p>
+              <h2>{isRegister ? "注册新账号" : "登录 docqa"}</h2>
+              <p>{isRegister ? "注册后即可直接使用工作台" : "登录后使用文档问答工作台"}</p>
             </div>
           </div>
 
-          {expired ? (
+          {expired && !isRegister ? (
             <div className="login-banner">登录已过期，请重新登录。</div>
           ) : null}
 
@@ -128,7 +146,7 @@ export function Login({
           </label>
 
           <label className="login-field">
-            <span>密码</span>
+            <span>密码{isRegister ? "（至少 8 位）" : ""}</span>
             <div className="login-input">
               <span className="login-input-icon">
                 <LockGlyph />
@@ -152,6 +170,25 @@ export function Login({
             </div>
           </label>
 
+          {isRegister ? (
+            <label className="login-field">
+              <span>确认密码</span>
+              <div className="login-input">
+                <span className="login-input-icon">
+                  <LockGlyph />
+                </span>
+                <input
+                  id="login-pw2"
+                  type={showPw ? "text" : PW_TYPE}
+                  autoComplete="off"
+                  value={confirmPw}
+                  onChange={(e) => setConfirmPw(e.target.value)}
+                  placeholder="再次输入密码"
+                />
+              </div>
+            </label>
+          ) : null}
+
           {error ? (
             <p className="login-error">
               <AlertIcon size={15} />
@@ -161,11 +198,32 @@ export function Login({
 
           <button type="submit" className="login-submit" disabled={busy}>
             {busy ? <span className="login-spinner" aria-hidden="true" /> : null}
-            <span>{busy ? "登录中…" : "登录"}</span>
+            <span>
+              {busy ? (isRegister ? "注册中…" : "登录中…") : isRegister ? "注册并登录" : "登录"}
+            </span>
             {busy ? null : <ArrowRightIcon size={16} />}
           </button>
 
-          <p className="login-hint">忘记密码？请联系管理员重置。</p>
+          <p className="login-switch">
+            {isRegister ? (
+              <>
+                已有账号？{" "}
+                <button type="button" onClick={() => switchMode("login")}>
+                  去登录
+                </button>
+              </>
+            ) : (
+              <>
+                还没有账号？{" "}
+                <button type="button" onClick={() => switchMode("register")}>
+                  注册
+                </button>
+              </>
+            )}
+          </p>
+          {!isRegister ? (
+            <p className="login-hint">忘记密码？请联系管理员重置。</p>
+          ) : null}
         </form>
       </main>
     </div>

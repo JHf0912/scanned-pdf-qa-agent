@@ -149,6 +149,15 @@ export async function login(username: string, pw: string): Promise<MeResult> {
   });
 }
 
+/** 开放自助注册：成功后直接登录。 */
+export async function register(username: string, pw: string): Promise<MeResult> {
+  return request<MeResult>("/api/auth/register", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ username, pw }),
+  });
+}
+
 export async function logout(): Promise<{ ok: boolean }> {
   return request<{ ok: boolean }>("/api/auth/logout", { method: "POST" });
 }

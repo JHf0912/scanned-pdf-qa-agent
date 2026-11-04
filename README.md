@@ -573,6 +573,7 @@ uv run docqa eval --doc out/demo/<产物> --golden data/golden/demo_qa.jsonl `
   普通用户只看/用自己上传的文档；管理员看全部，并在「用户管理」里创建账号、
   改角色、禁用/删除、重置密码，以及查看**每个账号上传了哪些文档**。
   账号存本地 `data/users.json`（PBKDF2 加盐哈希）；会话用 HttpOnly Cookie。
+  登录页支持**开放自助注册**（新账号默认普通用户，管理员可随时禁用/删除）。
   首次启动自动创建 `admin`，初始密码取 `DOCQA_ADMIN_PASSWORD`，未设置则随机生成并写入
   `data/ADMIN_INITIAL_PASSWORD.txt`（登录后请改密并删除）。
 

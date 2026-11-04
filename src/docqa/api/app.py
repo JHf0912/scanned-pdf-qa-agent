@@ -367,6 +367,11 @@ class ChangePwRequest(BaseModel):
     new_pw: str
 
 
+class RegisterRequest(BaseModel):
+    username: str
+    pw: str
+
+
 class UpdateUserRequest(BaseModel):
     role: Literal["user", "admin"] | None = None
     pw: str | None = None
@@ -485,11 +490,18 @@ def create_app(cfg: Config, *, domain: str = "standard") -> FastAPI:
                 set_current_user(None)
         path = request.url.path
         user = None
-        if path.startswith("/api/") and path != "/api/auth/login":
+        if path.startswith("/api/") and path not in (
+            "/api/auth/login",
+            "/api/auth/register",
+        ):
             user = _session_user(request)
         set_current_user(user)
         try:
-            if path.startswith("/api/") and path != "/api/auth/login" and user is None:
+            if (
+                path.startswith("/api/")
+                and path not in ("/api/auth/login", "/api/auth/register")
+                and user is None
+            ):
                 if path == "/api/auth/me":
                     return JSONResponse({"authenticated": False}, status_code=200)
                 return JSONResponse(
@@ -1169,6 +1181,23 @@ def create_app(cfg: Config, *, domain: str = "standard") -> FastAPI:
             {"authenticated": True, "username": user["username"], "role": user["role"]}
         )
         # 必须设在**实际返回**的响应上；注入的 Response 不会随返回值发出。
+        resp.set_cookie(
+            SESSION_COOKIE, token, httponly=True, samesite="lax",
+            max_age=SESSION_TTL, path="/",
+        )
+        return resp
+
+    @app.post("/api/auth/register")
+    def register(req: RegisterRequest) -> JSONResponse:
+        """开放自助注册：创建普通用户并直接登录；管理员可再禁用/删除。"""
+        try:
+            user = users.create(req.username or "", req.pw or "", "user")
+        except AuthError as exc:
+            raise HTTPException(400, str(exc)) from None
+        token = _issue_session(user)
+        resp = JSONResponse(
+            {"authenticated": True, "username": user["username"], "role": user["role"]}
+        )
         resp.set_cookie(
             SESSION_COOKIE, token, httponly=True, samesite="lax",
             max_age=SESSION_TTL, path="/",
