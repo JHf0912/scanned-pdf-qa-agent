@@ -121,3 +121,67 @@ export function getErrorMessage(error: unknown): string {
   if (error instanceof Error && error.message.trim()) return error.message;
   return "发生未知错误，请稍后重试。";
 }
+
+// ---------------------------------------------------------------- 认证与账号
+export interface MeResult {
+  authenticated: boolean;
+  username?: string;
+  role?: "user" | "admin";
+}
+
+export async function getMe(): Promise<MeResult> {
+  return request<MeResult>("/api/auth/me");
+}
+
+export async function login(username: string, pw: string): Promise<MeResult> {
+  return request<MeResult>("/api/auth/login", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ username, pw }),
+  });
+}
+
+export async function logout(): Promise<{ ok: boolean }> {
+  return request<{ ok: boolean }>("/api/auth/logout", { method: "POST" });
+}
+
+export interface UsersPayload {
+  users: import("./types").AdminUser[];
+}
+
+export async function adminListUsers(): Promise<UsersPayload> {
+  return request<UsersPayload>("/api/admin/users");
+}
+
+export async function adminCreateUser(
+  username: string,
+  pw: string,
+  role: "user" | "admin",
+): Promise<{ user: import("./types").AdminUser }> {
+  return request("/api/admin/users", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ username, pw, role }),
+  });
+}
+
+export async function adminUpdateUser(
+  username: string,
+  patch: { role?: "user" | "admin"; pw?: string; disabled?: boolean },
+): Promise<{ user: import("./types").AdminUser }> {
+  return request(`/api/admin/users/${encodeURIComponent(username)}`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(patch),
+  });
+}
+
+export async function adminDeleteUser(username: string): Promise<{ ok: boolean }> {
+  return request(`/api/admin/users/${encodeURIComponent(username)}`, { method: "DELETE" });
+}
+
+export async function adminUploads(): Promise<{
+  by_owner: Record<string, import("./types").AdminUpload[]>;
+}> {
+  return request("/api/admin/uploads");
+}

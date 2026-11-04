@@ -1891,6 +1891,231 @@
   cursor: zoom-in;
 }
 
+/* ---------------------------------------------------------------- 登录 */
+.login-page {
+  min-height: 100vh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  background: radial-gradient(circle at 30% 20%, #eef4f5, #f4f6f7 60%);
+}
+
+.login-card {
+  width: min(380px, 100%);
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  padding: 30px 28px;
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  background: #fff;
+  box-shadow: 0 18px 50px rgba(20, 30, 35, 0.1);
+}
+
+.login-brand {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 20px;
+  font-weight: 700;
+  color: var(--ink);
+}
+
+.login-sub {
+  margin: 0;
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.login-field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.login-field input {
+  height: 40px;
+  padding: 0 12px;
+  border: 1px solid var(--line-strong);
+  border-radius: 10px;
+  font-size: 14px;
+  color: var(--ink);
+  background: #fff;
+}
+
+.login-field input:focus {
+  outline: 2px solid var(--cyan);
+  outline-offset: 1px;
+}
+
+.login-error {
+  margin: 0;
+  color: #c0392b;
+  font-size: 12px;
+}
+
+.login-submit {
+  height: 42px;
+  justify-content: center;
+}
+
+.login-hint {
+  margin: 2px 0 0;
+  color: #9aa2a6;
+  font-size: 11px;
+  line-height: 1.5;
+}
+
+/* ---------------------------------------------------------------- 顶栏用户 */
+.wb-user {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  max-width: 140px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--ink);
+  font-size: 12px;
+}
+
+.wb-user-role {
+  padding: 1px 6px;
+  border-radius: 999px;
+  background: rgba(0, 128, 128, 0.12);
+  color: var(--cyan);
+  font-size: 10px;
+}
+
+.wb-logout {
+  border: none;
+  background: none;
+  color: var(--muted);
+  font-size: 12px;
+  cursor: pointer;
+  padding: 2px 4px;
+}
+
+.wb-logout:hover {
+  color: var(--ink);
+}
+
+/* ---------------------------------------------------------------- 管理面板 */
+.adminviewer {
+  width: min(760px, 96vw);
+}
+
+.admin-body {
+  padding: 16px 18px;
+}
+
+.admin-error {
+  color: #c0392b;
+  font-size: 12px;
+}
+
+.admin-section {
+  margin-bottom: 20px;
+}
+
+.admin-section h3 {
+  margin: 0 0 10px;
+  font-size: 13px;
+  color: var(--ink);
+}
+
+.admin-create {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.admin-create input,
+.admin-create select {
+  height: 34px;
+  padding: 0 10px;
+  border: 1px solid var(--line-strong);
+  border-radius: 8px;
+  font-size: 13px;
+  background: #fff;
+}
+
+.admin-users {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.admin-user {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  flex-wrap: wrap;
+  padding: 8px 10px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+}
+
+.admin-user-main {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.admin-user-name {
+  font-weight: 600;
+  color: var(--ink);
+  font-size: 13px;
+}
+
+.admin-self {
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.admin-user-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.admin-btn {
+  font-size: 11px;
+  padding: 4px 8px;
+}
+
+.admin-danger {
+  color: #c0392b;
+  border-color: rgba(192, 57, 43, 0.4);
+}
+
+.admin-uploads {
+  margin-bottom: 10px;
+}
+
+.admin-owner {
+  font-weight: 600;
+  font-size: 12px;
+  color: var(--ink);
+  margin-bottom: 4px;
+}
+
+.admin-uploads ul {
+  margin: 0;
+  padding-left: 18px;
+}
+
+.admin-uploads li {
+  font-size: 12px;
+  line-height: 1.7;
+  color: var(--ink);
+}
+
 @media (max-width: 767px) {
   .docviewer {
     width: 100vw;

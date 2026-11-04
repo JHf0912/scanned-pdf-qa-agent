@@ -3,11 +3,13 @@ import * as api from "../api";
 import type {
   AnswerMode,
   AskResponse,
+  AuthUser,
   BottomSheetKind,
   Chunk,
   Status,
   WorkbenchPanel,
 } from "../types";
+import { AdminPanel } from "../components/AdminPanel";
 import { AnswerCard } from "../components/AnswerCard";
 import { BottomSheet } from "../components/BottomSheet";
 import { CheckList } from "../components/CheckList";
@@ -34,7 +36,9 @@ import {
 } from "../components/States";
 
 interface WorkbenchProps {
+  user: AuthUser;
   onNavigateHome: () => void;
+  onLogout: () => void;
 }
 
 interface Message {
@@ -164,7 +168,7 @@ function DocIconFallback() {
   );
 }
 
-export function Workbench({ onNavigateHome }: WorkbenchProps) {
+export function Workbench({ user, onNavigateHome, onLogout }: WorkbenchProps) {
   const [status, setStatus] = useState<Status | null>(null);
   const [statusLoading, setStatusLoading] = useState(true);
   const [statusError, setStatusError] = useState<string | null>(null);
@@ -188,6 +192,7 @@ export function Workbench({ onNavigateHome }: WorkbenchProps) {
   const [viewer, setViewer] = useState<{ docId: string; title: string; page: number | null } | null>(
     null,
   );
+  const [adminOpen, setAdminOpen] = useState(false);
 
   const composerRef = useRef<HTMLInputElement>(null);
   const fileRef = useRef<HTMLInputElement>(null);
@@ -471,8 +476,25 @@ export function Workbench({ onNavigateHome }: WorkbenchProps) {
           </span>
           <span className="wb-domain">{status?.domain ?? "standard"}</span>
           {statusLoading ? <span className="wb-refreshing">刷新中…</span> : null}
+          <span className="wb-user" title={`${user.username}（${user.role === "admin" ? "管理员" : "普通用户"}）`}>
+            {user.username}
+            {user.role === "admin" ? <span className="wb-user-role">管理员</span> : null}
+          </span>
+          <button type="button" className="wb-logout" onClick={onLogout}>
+            退出
+          </button>
         </div>
         <div className="wb-top-actions">
+          {user.role === "admin" ? (
+            <button
+              type="button"
+              className="btn wb-open-doc"
+              title="管理账号与各账号上传"
+              onClick={() => setAdminOpen(true)}
+            >
+              用户管理
+            </button>
+          ) : null}
           <button
             type="button"
             className="icon-btn tablet-only"
@@ -696,6 +718,12 @@ export function Workbench({ onNavigateHome }: WorkbenchProps) {
         docTitle={viewer?.title ?? ""}
         page={viewer?.page ?? null}
         onClose={() => setViewer(null)}
+      />
+
+      <AdminPanel
+        open={adminOpen}
+        currentUser={user}
+        onClose={() => setAdminOpen(false)}
       />
     </div>
   );

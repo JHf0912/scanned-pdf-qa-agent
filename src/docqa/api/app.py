@@ -33,6 +33,7 @@ import json
 import mimetypes
 import os
 import re
+import secrets
 import stat
 import tempfile
 import threading
@@ -42,11 +43,19 @@ from pathlib import Path
 from typing import Literal
 from urllib.parse import quote
 
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import FastAPI, HTTPException, Request, Response
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
+from ..auth import (
+    AuthError,
+    UserStore,
+    current_user,
+    ensure_admin,
+    is_admin,
+    set_current_user,
+)
 from ..config import Config, load_domain
 from ..docx import is_docx
 from ..errors import DocqaError, InputError
@@ -58,6 +67,10 @@ from ..qa import QaAgent
 from ..qa.answer import HYBRID_REQUIRES_LLM_MESSAGE
 
 _log = get_logger("api")
+
+# 仅供测试：conftest 导入本模块后置 True，所有 /api 请求按"管理员"放行，免去逐个登录。
+# 生产进程不会设置它（默认 False）；test_auth 会显式置回 False 以测试真实鉴权。
+AUTH_DISABLED = False
 
 WEB_DIR = Path(__file__).resolve().parents[1] / "web"
 
@@ -338,6 +351,58 @@ class SelectRequest(BaseModel):
     doc_ids: list[str]
 
 
+class LoginRequest(BaseModel):
+    username: str
+    pw: str
+
+
+class CreateUserRequest(BaseModel):
+    username: str
+    pw: str
+    role: Literal["user", "admin"] = "user"
+
+
+class UpdateUserRequest(BaseModel):
+    role: Literal["user", "admin"] | None = None
+    pw: str | None = None
+    disabled: bool | None = None
+
+
+class _PerUserState:
+    """按**当前登录用户**隔离的加载状态。
+
+    原来是一个全局 dict，多用户会互相覆盖（A 选了文档，B 直接拿到 A 的已加载
+    文档，能问 A 的内容——是越权）。这里用 ContextVar 里的当前用户作键，
+    `state["x"]` 语法保持不变，但指向"本用户"的那份，改动面最小。
+    """
+
+    _DEFAULT = {
+        "result": None,
+        "agent": None,
+        "selected": None,
+        "load_error": None,
+        "error_for": None,
+    }
+
+    def __init__(self) -> None:
+        self._by_user: dict[str, dict] = {}
+
+    def _bucket(self) -> dict:
+        u = current_user()
+        name = u["username"] if u else "__anon__"
+        b = self._by_user.get(name)
+        if b is None:
+            b = dict(self._DEFAULT)
+            self._by_user[name] = b
+        return b
+
+    def __getitem__(self, key: str):
+        return self._bucket()[key]
+
+    def __setitem__(self, key: str, value) -> None:
+        self._bucket()[key] = value
+
+
 def create_app(cfg: Config, *, domain: str = "standard") -> FastAPI:
     app = FastAPI(title="docqa", docs_url="/docs")
 
@@ -346,17 +411,117 @@ def create_app(cfg: Config, *, domain: str = "standard") -> FastAPI:
     assets_dir = WEB_DIR / "assets"
     if assets_dir.is_dir():
         app.mount("/assets", StaticFiles(directory=assets_dir), name="assets")
-    state: dict = {
-        "result": None,
-        "agent": None,
-        "selected": None,   # list[str] | None；None = 自动取最新
-        "load_error": None,  # 只缓存**装载**错误，且带它对应的选择
-        "error_for": None,
-    }
+    state = _PerUserState()
     ask_slots = threading.BoundedSemaphore(MAX_CONCURRENT_ASKS)
     # 上传的并发槽位。**在读取 body 之前**获取：否则一个慢速大文件上传
     # 会先把内存占住，限流也就失去了意义。
     upload_slots = threading.BoundedSemaphore(MAX_CONCURRENT_UPLOADS)
+
+    # ---------------------------------------------------------------- 账号与会话
+    users_path = cfg.cache_dir.parent.parent / "users.json"
+    users = UserStore(users_path)
+    created_admin_pw = None
+    # 测试旁路模式下不写 users.json：否则会影响那些给 os.replace 打桩的写失败用例，
+    # 也会给每个用例平白增加一次 PBKDF2。生产（未设该变量）永远会确保有管理员。
+    if not AUTH_DISABLED:
+        created_admin_pw = ensure_admin(users, os.environ.get("DOCQA_ADMIN_PASSWORD"))
+    if created_admin_pw:
+        note = users_path.parent / "ADMIN_INITIAL_PASSWORD.txt"
+        try:
+            note.write_text(
+                "已自动创建初始管理员账号\n"
+                "  用户名: admin\n"
+                f"  初始密码: {created_admin_pw}\n"
+                "请登录后立刻修改密码，并删除本文件。\n",
+                encoding="utf-8",
+            )
+        except OSError:
+            pass
+        _log.warning(
+            "已创建初始管理员 admin，初始密码见 %s（请改密后删除）", note
+        )
+
+    SESSION_COOKIE = "docqa_session"
+    SESSION_TTL = 12 * 3600
+    sessions: dict[str, dict] = {}
+    sess_lock = threading.Lock()
+
+    def _issue_session(user: dict) -> str:
+        tok = secrets.token_urlsafe(32)
+        with sess_lock:
+            sessions[tok] = {"username": user["username"], "exp": time.time() + SESSION_TTL}
+        return tok
+
+    def _session_user(request: Request) -> dict | None:
+        tok = request.cookies.get(SESSION_COOKIE)
+        if not tok:
+            return None
+        rec = sessions.get(tok)
+        if not rec:
+            return None
+        if rec["exp"] < time.time():
+            sessions.pop(tok, None)
+            return None
+        u = users.get(rec["username"])
+        if not u or u.get("disabled"):
+            sessions.pop(tok, None)
+            return None
+        return {"username": u["username"], "role": u["role"]}
+
+    @app.middleware("http")
+    async def _auth_middleware(request: Request, call_next):
+        """除登录接口外，所有 /api/* 都要求已登录。静态页与 /app 放行（好让前端显示登录页）。"""
+        # 仅供测试：AUTH_DISABLED 时按"管理员"放行，避免每个既有用例都要登录。
+        if AUTH_DISABLED:
+            set_current_user({"username": "__auth_disabled__", "role": "admin"})
+            try:
+                return await call_next(request)
+            finally:
+                set_current_user(None)
+        path = request.url.path
+        user = None
+        if path.startswith("/api/") and path != "/api/auth/login":
+            user = _session_user(request)
+        set_current_user(user)
+        try:
+            if path.startswith("/api/") and path != "/api/auth/login" and user is None:
+                if path == "/api/auth/me":
+                    return JSONResponse({"authenticated": False}, status_code=200)
+                return JSONResponse(
+                    {"detail": "未登录或会话已过期，请重新登录"}, status_code=401
+                )
+            return await call_next(request)
+        finally:
+            set_current_user(None)
+
+    def _admin_guard() -> None:
+        if not is_admin():
+            raise HTTPException(403, "需要管理员权限")
+
+    def _visible_docs() -> list[dict]:
+        docs = _discover()
+        if is_admin():
+            return docs
+        u = current_user() or {}
+        return [d for d in docs if d.get("owner") == u.get("username")]
+
+    def _can_access_doc(doc_id: str) -> bool:
+        if is_admin():
+            return True
+        u = current_user() or {}
+        for d in _discover():
+            if d["doc_id"] == doc_id or d["dir"] == doc_id:
+                return d.get("owner") == u.get("username")
+        return False
+
+    def _assign_owner(out_dir: Path, username: str) -> None:
+        mf = out_dir / "manifest.json"
+        try:
+            data = json.loads(mf.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            return
+        data.setdefault("source", {})["owner"] = username
+        mf.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
 
     # ---------------------------------------------------------------- 产物发现
 
@@ -396,6 +561,7 @@ def create_app(cfg: Config, *, domain: str = "standard") -> FastAPI:
                 "source_type": info["source_type"],
                 "unit_count": info["unit_count"],
                 "unsupported": info["unsupported"],
+                "owner": (data.get("source") or {}).get("owner"),
             })
         out.sort(key=lambda d: d["mtime"], reverse=True)
         return out
@@ -419,7 +585,7 @@ def create_app(cfg: Config, *, domain: str = "standard") -> FastAPI:
         if state["load_error"] is not None and state["error_for"] == key:
             return
 
-        found = _discover()
+        found = _visible_docs()
         if not found:
             state["load_error"] = (
                 "尚未 ingest 任何文档。请在终端运行：docqa ingest <pdf|docx>，"
@@ -486,7 +652,7 @@ def create_app(cfg: Config, *, domain: str = "standard") -> FastAPI:
     @app.get("/api/status")
     def status() -> JSONResponse:
         _load()
-        docs = _discover()
+        docs = _visible_docs()
         if state["load_error"]:
             return JSONResponse({
                 "ready": False, "error": state["load_error"], "docs": docs,
@@ -522,12 +688,18 @@ def create_app(cfg: Config, *, domain: str = "standard") -> FastAPI:
     @app.get("/api/docs")
     def docs() -> JSONResponse:
         """列出全部可用产物（供前端切换/多选）。"""
-        return JSONResponse({"docs": _discover(), "selected": state["selected"]})
+        return JSONResponse({"docs": _visible_docs(), "selected": state["selected"]})
 
     @app.post("/api/select")
     def select(req: SelectRequest) -> JSONResponse:
         """切换要提问的产物。传空列表 = 回到"自动取最新"。"""
         wanted = [d for d in (req.doc_ids or []) if d.strip()]
+        visible = {d["doc_id"] for d in _visible_docs()} | {d["dir"] for d in _visible_docs()}
+        every = {d["doc_id"] for d in _discover()} | {d["dir"] for d in _discover()}
+        # 存在但无权 → 403；压根不存在 → 不拦，交给 _load 按原逻辑返回 400（"找不到"）。
+        forbidden = [w for w in wanted if w not in visible and w in every]
+        if forbidden:
+            raise HTTPException(403, f"无权访问这些文档：{forbidden}")
         state["selected"] = wanted or None
         # 清空装载缓存，强制下一次请求按新选择重装
         state["agent"] = None
@@ -575,7 +747,7 @@ def create_app(cfg: Config, *, domain: str = "standard") -> FastAPI:
         DOCX 与纯文本层页没有页图 → 404，前端据此退回纯文本高亮。
         """
         d = _dir_for(doc_id)
-        if d is None:
+        if d is None or not _can_access_doc(doc_id):
             raise HTTPException(404, "找不到该文档产物")
         try:
             data = json.loads((d / "manifest.json").read_text(encoding="utf-8"))
@@ -630,7 +802,7 @@ def create_app(cfg: Config, *, domain: str = "standard") -> FastAPI:
         `_discover()` 里找到，路径取自该产物的 manifest。DOCX 没有 PDF → 404。
         """
         d = _dir_for(doc_id)
-        if d is None:
+        if d is None or not _can_access_doc(doc_id):
             raise HTTPException(404, "找不到该文档产物")
         path = _source_pdf(d)
         if path is None:
@@ -652,7 +824,7 @@ def create_app(cfg: Config, *, domain: str = "standard") -> FastAPI:
         按段落列出解析文本；扫描页还可逐页看页图。
         """
         d = _dir_for(doc_id)
-        if d is None:
+        if d is None or not _can_access_doc(doc_id):
             raise HTTPException(404, "找不到该文档产物")
         try:
             data = json.loads((d / "manifest.json").read_text(encoding="utf-8"))
@@ -842,6 +1014,8 @@ def create_app(cfg: Config, *, domain: str = "standard") -> FastAPI:
                     "无法刷新产物目录时间戳",
                     extra={"detail": f"{type(exc).__name__}: {exc}"[:200]},
                 )
+            # 归属到上传者；管理员能看到全部，普通用户只看到自己上传的。
+            _assign_owner(out_dir, (current_user() or {}).get("username", ""))
         state["selected"] = [result.doc_id]
         state["agent"] = None
         state["result"] = None
@@ -978,5 +1152,98 @@ def create_app(cfg: Config, *, domain: str = "standard") -> FastAPI:
             return JSONResponse(json.loads(json.dumps(payload, ensure_ascii=False)))
         finally:
             ask_slots.release()
+
+    # ---------------------------------------------------------------- 认证
+    @app.post("/api/auth/login")
+    def login(req: LoginRequest, response: Response) -> JSONResponse:
+        user = users.verify((req.username or "").strip(), req.pw or "")
+        if not user:
+            raise HTTPException(401, "用户名或密码错误")
+        token = _issue_session(user)
+        resp = JSONResponse(
+            {"authenticated": True, "username": user["username"], "role": user["role"]}
+        )
+        # 必须设在**实际返回**的响应上；注入的 Response 不会随返回值发出。
+        resp.set_cookie(
+            SESSION_COOKIE, token, httponly=True, samesite="lax",
+            max_age=SESSION_TTL, path="/",
+        )
+        return resp
+
+    @app.post("/api/auth/logout")
+    def logout(request: Request, response: Response) -> JSONResponse:
+        token = request.cookies.get(SESSION_COOKIE)
+        if token:
+            sessions.pop(token, None)
+        resp = JSONResponse({"ok": True})
+        resp.delete_cookie(SESSION_COOKIE, path="/")
+        return resp
+
+    @app.get("/api/auth/me")
+    def me() -> JSONResponse:
+        u = current_user() or {}
+        return JSONResponse(
+            {"authenticated": True, "username": u.get("username"), "role": u.get("role")}
+        )
+
+    # ---------------------------------------------------------------- 管理员
+    @app.get("/api/admin/users")
+    def admin_users() -> JSONResponse:
+        _admin_guard()
+        return JSONResponse({"users": [u.to_dict() for u in users.list_users()]})
+
+    @app.post("/api/admin/users")
+    def admin_create_user(req: CreateUserRequest) -> JSONResponse:
+        _admin_guard()
+        try:
+            user = users.create(req.username, req.pw, req.role)
+        except AuthError as exc:
+            raise HTTPException(400, str(exc)) from None
+        return JSONResponse({"user": user})
+
+    @app.patch("/api/admin/users/{username}")
+    def admin_update_user(username: str, req: UpdateUserRequest) -> JSONResponse:
+        _admin_guard()
+        me_name = (current_user() or {}).get("username")
+        if username == me_name and (req.role == "user" or req.disabled):
+            raise HTTPException(400, "不能降级或禁用自己")
+        try:
+            if req.role is not None:
+                users.set_role(username, req.role)
+            if req.pw is not None:
+                users.set_pw(username, req.pw)
+            if req.disabled is not None:
+                users.set_disabled(username, req.disabled)
+        except AuthError as exc:
+            raise HTTPException(400, str(exc)) from None
+        return JSONResponse({"user": users.get(username)})
+
+    @app.delete("/api/admin/users/{username}")
+    def admin_delete_user(username: str) -> JSONResponse:
+        _admin_guard()
+        if username == (current_user() or {}).get("username"):
+            raise HTTPException(400, "不能删除自己")
+        try:
+            users.delete(username)
+        except AuthError as exc:
+            raise HTTPException(400, str(exc)) from None
+        return JSONResponse({"ok": True})
+
+    @app.get("/api/admin/uploads")
+    def admin_uploads() -> JSONResponse:
+        _admin_guard()
+        by_owner: dict[str, list[dict]] = {}
+        for d in _discover():
+            owner = d.get("owner") or "（未标记）"
+            by_owner.setdefault(owner, []).append(
+                {
+                    "doc_id": d["doc_id"],
+                    "source_type": d.get("source_type"),
+                    "chunks": d.get("chunks"),
+                    "engine": d.get("engine"),
+                    "mtime": d.get("mtime"),
+                }
+            )
+        return JSONResponse({"by_owner": by_owner})
 
     return app

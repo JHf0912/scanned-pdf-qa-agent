@@ -50,3 +50,7 @@ htmlcov/
 .idea/
 Thumbs.db
 desktop.ini
+# --- 账号库与初始密码（本地敏感，绝不入库） ---
+data/users.json
+data/users.json.tmp
+data/ADMIN_INITIAL_PASSWORD.txt

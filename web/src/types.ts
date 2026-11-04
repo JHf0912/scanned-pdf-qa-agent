@@ -154,6 +154,28 @@ export interface DocumentInfo {
   units: DocUnit[];
 }
 
+export type Role = "user" | "admin";
+
+export interface AuthUser {
+  username: string;
+  role: Role;
+}
+
+export interface AdminUser {
+  username: string;
+  role: Role;
+  disabled: boolean;
+  created_at?: number | null;
+}
+
+export interface AdminUpload {
+  doc_id: string;
+  source_type?: string | null;
+  chunks?: number | null;
+  engine?: string | null;
+  mtime?: number;
+}
+
 export type AnswerMode = "strict" | "hybrid";
 
 export interface AskResponse {
