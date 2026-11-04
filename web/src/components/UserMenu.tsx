@@ -5,9 +5,10 @@ interface UserMenuProps {
   user: AuthUser;
   onChangePassword: () => void;
   onLogout: () => void;
+  onOpenAdmin?: () => void;
 }
 
-export function UserMenu({ user, onChangePassword, onLogout }: UserMenuProps) {
+export function UserMenu({ user, onChangePassword, onLogout, onOpenAdmin }: UserMenuProps) {
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
 
@@ -36,6 +37,7 @@ export function UserMenu({ user, onChangePassword, onLogout }: UserMenuProps) {
         className="usermenu-trigger"
         aria-haspopup="menu"
         aria-expanded={open}
+        aria-label={`用户菜单（${user.username}）`}
         onClick={() => setOpen((v) => !v)}
       >
         <span className="usermenu-avatar">{initial}</span>
@@ -53,6 +55,19 @@ export function UserMenu({ user, onChangePassword, onLogout }: UserMenuProps) {
               </div>
             </div>
           </div>
+          {user.role === "admin" && onOpenAdmin ? (
+            <button
+              type="button"
+              className="usermenu-item"
+              role="menuitem"
+              onClick={() => {
+                setOpen(false);
+                onOpenAdmin();
+              }}
+            >
+              用户管理
+            </button>
+          ) : null}
           <button
             type="button"
             className="usermenu-item"

@@ -10,10 +10,6 @@ export function LandingPreview() {
             docqa
           </span>
           <span className="preview-doc">扫描件 A · 4 页 · fixture</span>
-          <span className="preview-ready">
-            <span className="preview-dot" />
-            就绪
-          </span>
         </div>
         <div className="preview-grid">
           <div className="preview-col preview-docs">

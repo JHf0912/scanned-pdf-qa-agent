@@ -33,13 +33,7 @@
   display: flex;
   align-items: center;
   gap: 8px;
-  margin-left: 4px;
-}
-
-.wb-domain {
-  color: var(--muted);
-  font-family: var(--mono);
-  font-size: 11px;
+  margin-left: auto;
 }
 
 .wb-refreshing {
@@ -51,7 +45,7 @@
   display: flex;
   align-items: center;
   gap: 4px;
-  margin-left: auto;
+  margin-left: 6px;
 }
 
 .wb-upload-btn {
@@ -75,6 +69,8 @@
 
 .wb-doc-switch {
   display: none;
+  flex: 0 0 auto;
+  white-space: nowrap;
   align-items: center;
   gap: 5px;
   min-height: 34px;
@@ -1608,13 +1604,23 @@
     height: 22px;
   }
 
-  .wb-domain,
   .wb-refreshing {
     display: none;
   }
 
   .wb-top-meta {
-    margin-left: 0;
+    margin-left: auto;
+  }
+
+  .usermenu-name,
+  .usermenu-caret {
+    display: none;
+  }
+
+  /* 手机端顶栏只保留：品牌 | 文档切换 | 头像 | 刷新 | 上传 */
+  .wb-open-doc,
+  .tablet-only {
+    display: none;
   }
 
   .wb-doc-switch,
@@ -2028,40 +2034,6 @@
   color: #9aa2a6;
   font-size: 11px;
   line-height: 1.5;
-}
-
-/* ---------------------------------------------------------------- 顶栏用户 */
-.wb-user {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  max-width: 140px;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  color: var(--ink);
-  font-size: 12px;
-}
-
-.wb-user-role {
-  padding: 1px 6px;
-  border-radius: 999px;
-  background: rgba(0, 128, 128, 0.12);
-  color: var(--cyan);
-  font-size: 10px;
-}
-
-.wb-logout {
-  border: none;
-  background: none;
-  color: var(--muted);
-  font-size: 12px;
-  cursor: pointer;
-  padding: 2px 4px;
-}
-
-.wb-logout:hover {
-  color: var(--ink);
 }
 
 /* ---------------------------------------------------------------- 管理面板 */

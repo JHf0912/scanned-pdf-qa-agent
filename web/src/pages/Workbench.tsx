@@ -478,15 +478,12 @@ export function Workbench({ user, onNavigateHome, onLogout }: WorkbenchProps) {
           <span aria-hidden="true">▾</span>
         </button>
         <div className="wb-top-meta">
-          <span className={`chip ${ready ? "chip-ok" : "chip-warn"}`}>
-            {ready ? "就绪" : "未就绪"}
-          </span>
-          <span className="wb-domain">{status?.domain ?? "standard"}</span>
           {statusLoading ? <span className="wb-refreshing">刷新中…</span> : null}
           <UserMenu
             user={user}
             onChangePassword={() => setChangePwOpen(true)}
             onLogout={onLogout}
+            onOpenAdmin={() => setAdminOpen(true)}
           />
         </div>
         <div className="wb-top-actions">
