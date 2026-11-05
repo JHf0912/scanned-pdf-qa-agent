@@ -6,8 +6,12 @@
 
 从一张没有文本层的扫描页，到一个带页码与条款号、能自检、也会明确拒答的答案。
 
+**也支持原生文本 DOCX**：DOCX 没有页，就不假装有页码——引用写成 `[§3.6 ¶4]`，
+不需要任何 OCR 配置，同一套自检与拒答照常生效。
+支持范围与限制见 [`docs/docx-support.md`](docs/docx-support.md)。
+
 [![CI](https://github.com/JHf0912/scanned-pdf-qa-agent/actions/workflows/test.yml/badge.svg)](https://github.com/JHf0912/scanned-pdf-qa-agent/actions/workflows/test.yml)
-[![coverage](https://img.shields.io/badge/coverage-88.3%25-brightgreen)](#测试)
+[![coverage](https://img.shields.io/badge/coverage-92%25-brightgreen)](#测试)
 [![python](https://img.shields.io/badge/python-3.12-3776AB?logo=python&logoColor=white)](pyproject.toml)
 [![license](https://img.shields.io/badge/license-MIT-green)](LICENSE)
 [![PyMuPDF](https://img.shields.io/badge/dependency-PyMuPDF%20AGPL--3.0-orange)](docs/deployment.md)
@@ -27,12 +31,12 @@
 
 |  |  |
 |:---|:---|
-| **输入** | 整页 JPEG、零字体资源、零可抽取字符的真实扫描件 |
-| **输出** | 带页码与条款号引用的答案 + 逐项自检结论 + 可解释的拒答 |
+| **输入** | 扫描件 PDF（整页 JPEG、零字体资源、零可抽取字符）；原生文本 DOCX（`.docx`） |
+| **输出** | 带页码或 `¶n` 与条款号引用的答案 + 逐项自检结论 + 可解释的拒答 |
 | **检索** | BM25 词元 + 字符二元组，RRF 融合，不依赖任何模型 |
 | **自检** | 引用有效性 / 数值落地 / 条号真实性，作为 **gate** |
 | **评估** | 三层指标（索引 → 检索 → 生成）+ 对抗变异 + 噪声扫描 |
-| **规模** | 388 个用例，覆盖率 88.3%；CI 含回归基线门禁 |
+| **规模** | 1008 个用例，覆盖率 92%；CI 含回归基线门禁 |
 | **许可** | 自身 MIT；依赖 PyMuPDF 为 AGPL-3.0 |
 
 ## 目录
@@ -40,6 +44,7 @@
 - [这个项目想说明什么](#这个项目想说明什么)
 - [流水线](#流水线)
 - [快速开始](#快速开始)
+- [回答范围：strict 与 hybrid](#回答范围strict-与-hybrid)
 - [密钥配置](#密钥配置)
 - [输入文档](#输入文档)
 - [仓库结构](#仓库结构)
@@ -105,6 +110,10 @@ flowchart LR
 `docqa --help` 看全部命令。**每一步都能单独跑、单独看中间产物**——
 这是"出了问题能定位"的前提。
 
+DOCX 在 `detect` 之前就分派到另一条短路：解析 `word/document.xml` → 标题栈切分 →
+索引 → 问答。**不经过类型判定、页图渲染与 OCR**；定位用 `¶n`（文档顺序第 n 个
+非空正文块），引用形如 `[§3.6 ¶4]`。
+
 ---
 
 ## 快速开始
@@ -113,7 +122,7 @@ flowchart LR
 
 ```powershell
 uv python pin 3.12
-uv sync --all-extras          # 注意：不带 --all-extras 会卸载可选依赖
+uv sync --all-extras          # 裸 uv sync 会移除 eval extra（jiwer/zhconv），eval 测试会缺依赖
 
 Copy-Item .env.example .env   # 填入模型配置（.env 已 gitignore，绝不入库）
 
@@ -121,11 +130,46 @@ uv run docqa doctor           # 环境自检，会**实测**端点是否真支�
 uv run docqa ingest data/raw/<你的.pdf> --domain standard
 uv run docqa ask "表 1 中半圆键的键宽 b 的 AQL 是多少？"
 uv run docqa eval --report out/eval_report.html
-uv run docqa serve            # Web UI
+uv run docqa serve            # 响应式 Web 工作台
 ```
+
+DOCX 走另一条短路（不需要 OCR 配置，也不需要 `doctor` 实测视觉端点）：
+
+```powershell
+uv run docqa ingest data/raw/<你的.docx> --domain standard
+uv run docqa ask "3.6 的斜度公差是多少？"
+uv run docqa eval-docx data/raw/<你的.docx>     # 段落覆盖率 / 引用回环，门禁不过退出码 6
+```
+
+自定义 DOCX 引用模板（`docx_citation_template`）**必须是规范形态**——
+`[§{section} ¶{para}]` / `[¶{para}]` / `[§{section}]`（占位符顺序与间距可调）。
+带字面前缀的模板（如 `[DOCX §{section} ¶{para}]`）能渲染但 `parse_citations()` 解析
+不回来，`eval-docx` 会判回环失败（退出码 6）——这是有意为之的可执行限制，
+详见 [`docs/docx-support.md`](docs/docx-support.md) 5.5。
+
+DOCX 解析依赖 `python-docx`（MIT），不引入新的 AGPL 依赖。
 
 > **没有模型密钥也能跑。** 仓库自带一份合成件的完整产物，下游链路无需任何端点即可复现，
 > 见 [输入文档](#输入文档) 一节的"无需密钥的合成件"。
+
+### Web 工作台
+
+`docqa serve` 打开的是 React 工作台：`/` 是入口页，`/app` 是工作台。
+桌面三栏（文档 / 对话 / 证据与自检）、平板两栏 + 抽屉、手机单栏 + 底部标签；
+上传、多选跨文档检索、引用定位、逐项自检与六类拒答都在里面；输入框上方可切换
+**回答范围**（strict / hybrid，见[上文](#回答范围strict-与-hybrid)）。
+上传按**内容哈希**命名落盘（`<safe_stem>-<sha256[:32]>.docx`，同内容重复上传幂等），
+产物的 `doc_id` 就是该存储名，前端 `docTitle()` 不再重复显示哈希；CLI 直接
+`ingest` 的产物仍是 `<stem>-<sha8>`，旧产物回读不变。
+
+前端源码在 [`web/`](web/README.md)，构建产物写入 `src/docqa/web/` 并已入库，
+所以**运行不需要 Node**。改了前端源码后重新构建：
+
+```bash
+cd web
+npm install
+npm run build
+```
 
 ### 一条命令起容器
 
@@ -136,6 +180,10 @@ docker build -t docqa .
 docker run --rm -p 8000:8000 --env-file .env \
   -v "$PWD/data/raw:/app/data/raw:ro" -v docqa-derived:/app/data/derived docqa
 ```
+
+> `data/raw` 的**只读挂载等于关闭 Web 上传**（上传会写 `data/raw/`）。需要上传时
+> 改成可写卷，并只让服务账号可写。`docqa serve` **没有认证**，默认只绑 127.0.0.1；
+> `--host 0.0.0.0` 等于把上传/解析与生成模型配额开放给网络，对外请加反向代理认证。
 
 > [!WARNING]
 > 镜像里含 **PyMuPDF（AGPL-3.0）**。**分发镜像**或**对外提供服务**会触发
@@ -168,6 +216,55 @@ uv run docqa ask "两边的验收标准分别是多少？" --doc <产物A> --doc
 合并时**重建**一次索引（BM25 的 IDF 依赖整个语料，分头算出来的分数不可比），
 失败页也升级成 `(doc_id, page_no)` —— 两份文件的"第 3 页"是两回事，
 只比页码会让 A 的失败页误伤 B 的证据。
+
+---
+
+## 回答范围：strict 与 hybrid
+
+工作台的每一问都可以选择**回答范围**；默认 `strict`，也可显式选 `hybrid`。
+
+| 模式 | 文档能支持的内容 | 文档没有的内容 |
+|---|---|---|
+| `strict`（默认） | 只能来自证据，逐句引用 | 明确说"文档中未提及" |
+| `hybrid`（显式选择） | 仍逐句引用，文档部分**逐字包含证据**（子串 gate） | 末尾 `【模型知识补充】` 段：禁止引用、禁止声称文档写了 |
+
+- hybrid **不因"文档没有"拒答**；但 `extraction_failed`（存在未识别页且证据为空/覆盖低时
+  **前置拒答、不调用模型**）、歧义、自检失败仍拒答，**不会用模型知识替代**。
+- hybrid 的文档正文**句句有据**：GATE `doc_sentence_support` **按句覆盖**——句末引用
+  覆盖同一句的逗号/分号子句，但**每个被覆盖子句仍须逐字可证**，且**不跨句**（借用源是
+  同句最后一个**带尾部标记**的子句；标记后允许 0–2 个闭合括号/中文引号）。去引用后必须是
+  所引证据的**段边界匹配**（空白/表格 `|`/句读标点/引号括号属段
+  边界字符，不参与匹配核心、只用于边界判定；连接词 `的/为/和/按` 只按 **jieba
+  token** 删除——"行为/按钮/目的"不会被拆；单位/符号/限定词保留在核心，任何差异
+  都被拒）。匹配起点/终点必须在证据开头/结尾或紧邻边界字符，**紧邻无空格的
+  "不得/未/不"前缀删除会失败**；但**空白/换行/表格单元分隔的否定前缀仍可能被单独
+  引用**（`不得 | 使用铝`、`不得\n使用铝`、`不得 使用铝` 是已知残余 P2，不是绝对
+  安全）。**正常改写、单位同义写法（兆帕 vs MPa）、语序调整、±/℃/%/以上/不大于等
+  差异都可能被拒**；句号在引号内（`“…”[p.1 §3.1]`）可能被切分误杀，词中间截取
+  会被段边界拒绝——只能从段/表格单元/词边界截取。需要改写请用 strict，或让模型先
+  引用原句再补充。**每个 citation-like token 必须绑定到已解析 citation**
+  （GATE `doc_citation_marks`），`[p.99 §9.9]` 这类伪标记直接判失败；原文自带
+  `[p.3]` 字样时也可能被当作伪引用。零引用只允许"正文为空且确有补充段"或**通用否定
+  白名单短句**（`文档/本标准/本文件（该文档/该标准）+ 未/没有/并未 + 规定/提及/… +
+  句号`，不含具体对象）；**具体否定 + 真实 citation 仍会被拒**（如"文档中未规定
+  冲击韧性要求。[p.1 §3.1]"），需整句逐字引用证据、写通用否定 + 补充段，或切 strict。
+  **例外**：`文档中未规定。` 无论有无 citation 都可放行——它是"未找到"的判断声明，
+  不是具体证据；具体结论仍必须引用或放补充段。
+  正文与补充段都为空按**起草失败**处理（修复/拒答），不是成功响应。
+- 未配置生成模型时 hybrid **不可用**（前端禁用 / API 400 / CLI 配置错误，退出码 2），
+  不静默降级；非法模式：API **422**、CLI **退出 2**。无产物/未就绪时 `ask` 是 **503**，
+  **400 留给请求不合法**（如 hybrid 无 LLM、空问题、超长问题）。
+- **模型知识可能过时或错误，不能作为合规/审计的唯一依据**；文档内容仍以引用为准。
+
+```powershell
+uv run docqa ask "3.6 的斜度公差是多少？"                 # strict（默认）
+uv run docqa ask "同类键的常见材料牌号有哪些？" --mode hybrid
+```
+
+API 只扩展字段、不新增端点：`POST /api/ask {"question": "…", "mode": "hybrid"}`，响应带
+`answer_mode` / `model_knowledge` / `knowledge_used`；`answer` 与 `citations` 仍只来自
+文档正文。前端 `ModeSwitch` 在输入框上方，切换只对下一问生效。完整边界、自检与
+已知限制见 [`docs/hybrid-mode.md`](docs/hybrid-mode.md)。
 
 ---
 
@@ -204,6 +301,7 @@ DOCQA_OCR_MODEL=
 |:---|:---|:---:|
 | **GB/T 1568-2008《键 技术条件》**（4 页，含表 1、真条款号） | **主文档** | 否 |
 | **合成演示件**（`tools/make_demo_artifact.py` 生成） | 无密钥复现全链路 | 产物入库，PDF 本地生成 |
+| **DOCX 合成件**（`artifacts/docx/demo.docx`，`tools/make_demo_docx.py` 生成） | DOCX 链路：无 OCR、`[§… ¶n]` 引用 | 是 |
 
 **GB/T 1568-2008** 取自[国家标准全文公开系统](https://openstd.samr.gov.cn/)的免费公开预览。
 该系统以瓦片打乱方式提供预览，仓库附带的 `tools/fetch_openstd.py` 用于还原页图并打包成
@@ -212,6 +310,11 @@ DOCQA_OCR_MODEL=
 
 请按 [`docs/troubleshooting.md`](docs/troubleshooting.md) 第四节自行放入 PDF 到 `data/raw/`。
 **仓库不提交该文件**，这是刻意的隐私与合规决定。
+
+支持的格式：`.pdf` 与**原生文本 `.docx`**。明确不支持 `.doc`（OLE 复合文档）、
+`.docm` / `.dotm`（宏）、`.dotx`（模板）与加密 DOCX；表格只做**线性化**，
+合并单元格网格与单元格级引用留到 Phase 2。完整范围与限制见
+[`docs/docx-support.md`](docs/docx-support.md)。
 
 ### 无需密钥的合成件
 
@@ -235,6 +338,17 @@ uv run docqa serve
 所以只能验证**管线与产物格式**，不能据此声明 OCR 精度。
 详见 [`artifacts/demo/README.md`](artifacts/demo/README.md)。
 
+DOCX 的合成件同理，且**连 fixture 引擎都不需要**（没有识别环节）：
+
+```powershell
+uv run python tools/make_demo_docx.py
+uv run docqa ingest artifacts/docx/demo.docx
+uv run docqa ask "3.6 的斜度公差是多少？"
+uv run docqa eval-docx artifacts/docx/demo.docx
+```
+
+详见 [`artifacts/docx/README.md`](artifacts/docx/README.md)。
+
 ---
 
 ## 仓库结构
@@ -250,6 +364,11 @@ src/docqa/
 │   ├── spotcheck.py   跨引擎一致性校验 ← 防的是"证据本身被识别错"
 │   └── fixture.py     测试通道（机械隔离，不得据此声明 OCR 精度）
 ├── tables.py          HTML 表格 → 矩形单元格网格（展开合并，保留 spans）
+├── docx/
+│   ├── parser.py      DOCX 正文：body 顺序、run walker、标题、表格线性化
+│   ├── chunks.py      标题栈切分 + `¶n` 全覆盖断言（丢内容即报错）
+│   ├── numbering.py   numbering.xml → 条号（有界；bullet/none 不伪造）
+│   └── security.py    ZIP/XML 校验：大小、加密位、DTD、路径穿越
 ├── chunker.py         条款感知切分 + 句子窗口退化路径
 ├── index/             混合检索：BM25 词元 + BM25 字符二元组，RRF 融合
 ├── injection.py       提示注入扫描
@@ -259,20 +378,28 @@ src/docqa/
 │   ├── policy.py      六类拒答 + 歧义检测
 │   └── agent.py       有界修复循环 ← 自检作为控制流的落点
 ├── eval/              三层指标 + 对抗变异 + 噪声鲁棒性 + 回归基线
+│                      + `docx_eval.py`（段落覆盖 / 引用回环）
 ├── pipeline.py        ingest 编排（每步产物独立落盘 + manifest）
-├── report.py          静态 HTML 评估报告
-└── cli.py / api/ / web/
+├── report.py          静态 HTML 评估报告（按 PDF / DOCX 分支渲染）
+└── cli.py / api/ / web/（构建产物）
 
 config/domains/        五个业务场景 profile（改这里迁移场景，不改代码）
 prompts/               识别与问答提示词
 data/golden/           金标集 + 双人独立阅读的转写基准
 data/baselines/        CI 回归基线
-data/raw/              输入 PDF（gitignore）
+data/raw/              输入 PDF / DOCX（gitignore）
 artifacts/demo/        合成件完整产物（可公开、可复现）
+artifacts/docx/        DOCX 合成件（demo.docx + 说明）
 artifacts/report/      已跑好的评估报告
 docs/                  设计、评估、AI 使用、迁移、部署、排查
+  ├── docx-support.md  DOCX 支持范围、`¶n` 定义、限制、eval-docx 指标
+  ├── hybrid-mode.md   strict/hybrid 回答范围：边界、API/CLI、自检、风险
+  ├── reviews/         设计审查与冻结契约
+  └── verification/    独立验证记录
 tools/                 openstd 页图还原、扫描件 PDF 打包、合成演示件生成
+web/                  React + Vite + TypeScript 前端源码（构建到 src/docqa/web/）
 tests/                单元 / 集成 / 端到端 / 真实端点（live）
+  └── docx/           DOCX 解析、编号、切分、管线、评估
 ```
 
 ---
@@ -287,6 +414,7 @@ tests/                单元 / 集成 / 端到端 / 真实端点（live）
 | 拒答判据用**覆盖率** | RRF 适合排序，不适合表达置信度 |
 | 表格**永不跨 chunk** | 数值离开上下文就失去意义 |
 | 无模型时**抽取式降级** | 它根本不具备产生数值幻觉的能力 |
+| 回答范围分 **strict / hybrid** | 模型知识单独标注、不可引用；文档内容仍以引用为准 |
 
 ### 自检抓什么、不抓什么
 
@@ -344,7 +472,8 @@ RRF 的分数是 `Σ w/(k+rank)`，k=60 时排名第 1 与第 20 只差约 27%�
 uv run pytest -q --cov=src/docqa --cov-report=term-missing
 ```
 
-**当前覆盖率 88.3%**（4512 条语句中 527 条未覆盖；388 个用例中 384 通过、4 个 live 用例跳过）。
+**当前覆盖率 92%**（6965 条语句中 578 条未覆盖；1008 个用例中 1004 通过、4 个 live 用例跳过；
+其中 hybrid 模式专项 168 个用例）。
 默认用例全部 mock 外部依赖、**不读真实文档，也不读 `.env`**：
 `tests/conftest.py` 在收集用例之前清掉全部 `DOCQA_*` 环境变量，并置
 `DOCQA_DISABLE_DOTENV=1`，让 `load_config()` 不再自动读项目根的 `.env`。
@@ -356,6 +485,7 @@ uv run pytest -q --cov=src/docqa --cov-report=term-missing
 | 通道 | 命令 | 说明 |
 |:---|:---|:---|
 | 默认 | `uv run pytest -q` | mock 外部依赖、不读 `.env`；**任何机器上都不碰网络** |
+| DOCX 评估 | `uv run docqa eval-docx x.docx` | 现场 ingest 到临时目录再评估；不需要任何 OCR 配置与密钥，门禁不过退出码 6 |
 | 离线探针 | `uv run docqa eval-probes` | 在合成件上测评估机制本身（句级支撑度 / 跨引擎标记 / 定向污染）；代码级钉住 `read_dotenv=False`，不读 `.env` |
 | 真实端点 | `uv run pytest -m live --live -q` | 真的打一次端点，会产生少量费用 |
 | CI | `ruff check` → `pytest` → 基线重跑 | 覆盖率低于 84% 或指标下滑即失败 |
@@ -404,6 +534,7 @@ uv run docqa eval --doc out/demo/<产物> --golden data/golden/demo_qa.jsonl `
 | 合成件全链路 | ✅ 已跑通 | 10 题有标注，Recall@10 100% |
 | 真实文档端到端 | ⚠️ 部分 | 抽取式 44.4%；生成 55.6%–61.1% |
 | 索引层质量 | ✅ 干净 | CER 0.38%，表格单元格 100% |
+| DOCX 原生支持 | ✅ Phase 1 | 段落覆盖 12/12、引用回环 12/12；表格仅线性化 |
 | 自检 / 拒答 | ✅ 有机制、有测试 | 六类拒答 + 对抗变异检出率 |
 | 跨引擎校验 | ⚠️ 部分实测 | 合成件注入字段 35/35、假警报 0；真实文档未跑 |
 | 容器镜像 | ⚠️ 未构建 | 静态检查通过，`docker build` 未执行 |
@@ -413,8 +544,14 @@ uv run docqa eval --doc out/demo/<产物> --golden data/golden/demo_qa.jsonl `
 - **解析层**：类型判定（含 1×1 干扰图与乱码文本层）、位精确取图、VLM 结构化识别
   （正文 / 条款 / 表格）、**原生文本层抽取**（TEXT 页直接用 PyMuPDF 取块，不进识别模型）、
   内容寻址缓存与溯源链、跨引擎一致性校验；
-- **索引与检索**：条款感知切分（含退化路径）、无模型混合检索、
+- **索引与检索**：条款感知切分（含退化路径；**一个 section 不跨页**——跨页拆成按页的
+  片段，保证引用页码与页图 bbox 指向正确页）、无模型混合检索、
   **检索层 Recall@k / MRR / nDCG**；
+- **DOCX 原生支持（Phase 1）**：按 `w:body` 顺序的正文解析（超链接、内容控件、
+  修订保留/排除）、自动编号有界解析、标题栈切分、表格线性化、
+  `[§3.6 ¶4]` 引用与 `¶n` 定位、**无 OCR 配置也能 ingest**、
+  `eval-docx` 三条硬门禁（段落覆盖 / 引用回环 / `unit_count` 对账）；范围与限制见
+  [docs/docx-support.md](docs/docx-support.md)；
 - **问答与自检**：有据生成、程序化自检（数值边界匹配 / 条号真实性 / 零引用判失败）、
   六类拒答与歧义检测、有界修复循环；
 - **评估与工程**：对抗变异套件、三层评估与 Wilson 区间、**OCR 噪声扫描入口**、
@@ -423,9 +560,25 @@ uv run docqa eval --doc out/demo/<产物> --golden data/golden/demo_qa.jsonl `
   **三项"未测量"的离线探针**（`docqa eval-probes`：句级支撑度、跨引擎标记、
   **定向污染命中答案字段**的精确率/召回率与静默错答率，数字与局限见
   [docs/evaluation.md](docs/evaluation.md) 第六之三、第六之四）；
-- **交付**：CLI + Web UI + 静态报告、双 provider + 无模型回退、
-  五个业务场景 profile、**容器镜像与部署文档**、88.3% 覆盖率
-  （`pytest --cov=src/docqa`，4512 行中 527 行未覆盖）、完整文档。
+- **交付**：CLI + 响应式 Web 工作台（桌面三栏 / 平板两栏 / 手机单栏）+ 静态报告、
+  双 provider + 无模型回退、五个业务场景 profile、**容器镜像与部署文档**、
+  92% 覆盖率（`pytest --cov=src/docqa`，6965 行中 578 行未覆盖）、完整文档；
+- **引用页图高亮**：扫描页的引用在返回证据全文之外，还返回该页页图与
+  归一化到 0~1 的 bbox；工作台把页图作为证据卡底图、用 SVG 覆盖层画出引用框。
+  DOCX 与纯文本层页没有页图，自动退回纯文本高亮（不假装有页图）。
+- **原文浏览**：文档列表每行有「预览」按钮，点开即整份查看源文件——PDF 用内嵌原生
+  阅读器（可滚动/缩放/跳页，也可「新标签打开」），DOCX 无 PDF 则按段落列出解析文本；
+  证据卡里的页图缩略图也可点击，直接定位到该页。
+- **三种回答模式**：`strict`（仅文档）/ `hybrid`（文档 + 模型知识）/ `free`（自由回答：
+  不检索、不引用、不受文档限制，直接由生成模型作答；需配置生成模型，未配置时明确报错）。
+  自由回答不显示引用与自检门禁（它本就不做这些）。
+- **登录与两级权限**：默认需要登录才能进入工作台。角色分 `user` / `admin`：
+  普通用户只看/用自己上传的文档；管理员看全部，并在「用户管理」里创建账号、
+  改角色、禁用/删除、重置密码，以及查看**每个账号上传了哪些文档**。
+  账号存本地 `data/users.json`（PBKDF2 加盐哈希）；会话用 HttpOnly Cookie。
+  登录页支持**开放自助注册**（新账号默认普通用户，管理员可随时禁用/删除）。
+  首次启动自动创建 `admin`，初始密码取 `DOCQA_ADMIN_PASSWORD`，未设置则随机生成并写入
+  `data/ADMIN_INITIAL_PASSWORD.txt`（登录后请改密并删除）。
 
 合成件上跑通全链路：类型判定 → 识别 → 切分 → 检索 → 问答 → 自检 → 拒答 → 评估 → 报告。
 
@@ -577,6 +730,20 @@ Recall@10 100%、MRR 0.95、nDCG 0.963；真实文档的金标集还没标相关
 基础镜像标签失效、apt 包改名这类**只有构建时才暴露**的问题。
 第一次真正部署前请自己 build 一遍。
 
+#### 12. 引用页图高亮的边界：块级、依赖 OCR 的 bbox
+
+页图高亮是**证据块级**的，不是字符级：一个引用会把它所覆盖证据块（按页分组）
+的 bbox 都画出来，读到的是"这块文字在这页的哪个区域"，不是"精确到某几个字"。
+
+- **依赖 OCR 返回 bbox**：VLM 引擎会在 `ocr.json` 里给出块的像素 bbox；没有任何
+  bbox 的产物（例如合成 `fixture` 引擎）拿不到框，只能退回纯文本高亮——这是数据
+  事实，不是渲染失败。
+- **单位在装载时归一化**：VLM 是页图像素、文本层引擎是 PDF 点，装载时按引擎
+  换算成相对页面的比例坐标，所以前端缩放、缩略图、响应式都不重算；代价是
+  依赖 manifest 里记录的那张渲染图尺寸（`upscale`/重采样若与 OCR 输入不一致会让
+  框整体偏移，当前两者的 `upscale` 一致）。
+- **只高亮被引页**：跨页块在其他页上的框不参与该引用的高亮。
+
 ---
 
 ## 文档
@@ -584,6 +751,8 @@ Recall@10 100%、MRR 0.95、nDCG 0.963；真实文档的金标集还没标相关
 | 文档 | 内容 |
 |:---|:---|
 | [`docs/design.md`](docs/design.md) | 设计思路与被否决的方案 |
+| [`docs/docx-support.md`](docs/docx-support.md) | **DOCX 支持范围**：`¶n` 定义、引用格式、产物、`eval-docx` 指标、限制 |
+| [`docs/hybrid-mode.md`](docs/hybrid-mode.md) | **回答范围 strict/hybrid**：边界、补充段、拒答、API/CLI、自检与风险 |
 | [`docs/evaluation.md`](docs/evaluation.md) | **每个指标的公式、样本量与已知局限** |
 | [`docs/ai-usage.md`](docs/ai-usage.md) | AI 使用说明：**AI 错在哪、我怎么发现的** |
 | [`docs/scalability.md`](docs/scalability.md) | 迁移到金融/合规/客户交付：哪些改配置、哪些改代码 |

@@ -77,8 +77,9 @@ def parse_viewer(html: str) -> list[list[Tile]]:
             Tile(int(t["col"]), int(t["row"]), int(t["x"]), int(t["y"]))
             for t in _TILE_RE.finditer(page_match["body"])
         ]
-        if tiles:
-            pages.append(tiles)
+        # 空白页的瓦片会被查看器省略。**不能跳过**：跳过会让后续页码整体
+        # 前移，报告里的 p.N 就会指到错误的内容。保留空列表，还原成白底页。
+        pages.append(tiles)
     return pages
 
 

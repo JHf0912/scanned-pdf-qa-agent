@@ -31,7 +31,7 @@ from pathlib import Path
 import pymupdf
 
 from .errors import PdfUnreadableError
-from .models import DetectSignal, PageKind, PageProfile, PdfProfile
+from .models import DetectSignal, PageKind, PageProfile, SourceProfile
 
 # --- 阈值（集中在此，便于按语料调整；调整依据写进 docs/evaluation.md）---
 
@@ -254,7 +254,7 @@ def _profile_page(doc: pymupdf.Document, page_no: int, pdf_path: Path) -> PagePr
     )
 
 
-def profile_pdf(path: Path, *, cross_check: bool = True) -> PdfProfile:
+def profile_pdf(path: Path, *, cross_check: bool = True) -> SourceProfile:
     """对整份 PDF 取证并逐页判定类型。
 
     Args:
@@ -307,7 +307,7 @@ def profile_pdf(path: Path, *, cross_check: bool = True) -> PdfProfile:
     else:
         overall = "HYBRID"
 
-    return PdfProfile(
+    return SourceProfile(
         path=path,
         sha256=_sha256_of(path),
         page_count=len(pages),
@@ -317,7 +317,7 @@ def profile_pdf(path: Path, *, cross_check: bool = True) -> PdfProfile:
     )
 
 
-def pages_needing_ocr(profile: PdfProfile) -> list[int]:
+def pages_needing_ocr(profile: SourceProfile) -> list[int]:
     """返回需要送 OCR 的页码。
 
     硬不变量在此落地：**判为 TEXT 的页永不送去 OCR**。

@@ -72,16 +72,31 @@ _SNIPPET_CHARS = 80
 
 @dataclass(frozen=True)
 class InjectionHit:
-    """一处可疑的指令样文本。"""
+    """一处可疑的指令样文本。
+
+    `locator` 区分 PDF 与 DOCX：PDF 按页（`第 N 页`），DOCX 按正文块
+    （`¶N`）。DOCX 没有页，若沿用 `page_no`，报告里会出现「第 0 页」。
+    """
 
     kind: str          # override / exfiltrate / role_play
     page_no: int
     snippet: str
+    locator: str = "page"
+    para_no: int | None = None
 
     def to_dict(self) -> dict:
-        return {"kind": self.kind, "page_no": self.page_no, "snippet": self.snippet}
+        return {
+            "kind": self.kind,
+            "page_no": self.page_no,
+            "snippet": self.snippet,
+            "locator": self.locator,
+            "para_no": self.para_no,
+        }
 
     def describe(self) -> str:
+        if self.locator == "paragraph":
+            para = self.para_no if self.para_no is not None else "?"
+            return f"¶{para}（{self.kind}）：{self.snippet}"
         return f"第 {self.page_no} 页（{self.kind}）：{self.snippet}"
 
 
@@ -91,11 +106,17 @@ class InjectionReport:
 
     `scanned` 为 True 表示确实扫过（而不是"没配所以没扫"）——
     这两者在报告里必须分开，否则"没有命中"和"没有检查"会长得一模一样。
+
+    `locator`/`units_scanned` 让同一份报告结构同时适用 PDF 与 DOCX：
+    PDF 按页（`pages_scanned`），DOCX 按正文块（`units_scanned`）。
+    新增字段带默认值，PDF 的既有字段与含义不变。
     """
 
     scanned: bool = False
     hits: list[InjectionHit] = field(default_factory=list)
     pages_scanned: int = 0
+    locator: str = "page"          # "page"（PDF）/ "paragraph"（DOCX）
+    units_scanned: int = 0         # DOCX 非空正文块数；PDF 恒为 0
 
     @property
     def n_hits(self) -> int:
@@ -111,13 +132,25 @@ class InjectionReport:
         return {
             "scanned": self.scanned,
             "pages_scanned": self.pages_scanned,
+            "locator": self.locator,
+            "units_scanned": self.units_scanned,
             "hits": [h.to_dict() for h in self.hits],
             "by_kind": self.kinds(),
         }
 
 
-def scan_text(text: str, page_no: int = 0) -> list[InjectionHit]:
-    """扫一段文本，返回命中的可疑片段。"""
+def scan_text(
+    text: str,
+    page_no: int = 0,
+    *,
+    locator: str = "page",
+    para_no: int | None = None,
+) -> list[InjectionHit]:
+    """扫一段文本，返回命中的可疑片段。
+
+    PDF 调用方沿用 `scan_text(text, page_no=N)`；DOCX 调用方传
+    `locator="paragraph", para_no=n`，报告里就会显示 `¶n` 而不是「第 0 页」。
+    """
     hits: list[InjectionHit] = []
     if not text:
         return hits
@@ -126,7 +159,8 @@ def scan_text(text: str, page_no: int = 0) -> list[InjectionHit]:
             start = max(0, m.start() - 10)
             end = min(len(text), m.end() + _SNIPPET_CHARS)
             snippet = " ".join(text[start:end].split())
-            hits.append(InjectionHit(kind=kind, page_no=page_no, snippet=snippet))
+            hits.append(InjectionHit(kind=kind, page_no=page_no, snippet=snippet,
+                                     locator=locator, para_no=para_no))
     return hits
 
 

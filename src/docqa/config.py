@@ -168,8 +168,11 @@ class DomainProfile:
     clause_patterns: list[str] = field(default_factory=list)
     # 表格题的路由线索：出现这些词时提升表格 chunk 权重
     table_cues: list[str] = field(default_factory=list)
-    # 引用渲染模板
+    # 引用渲染模板（PDF 按页）
     citation_template: str = "[p.{page} §{clause}]"
+    # 引用渲染模板（DOCX 按段落）。DOCX 没有页，必须单独一套模板；
+    # 用 PDF 模板会渲染出 `[p.None §3.6]`。
+    docx_citation_template: str = "[§{section} ¶{para}]"
     chunk: ChunkConfig = field(default_factory=ChunkConfig)
     retrieve: RetrieveConfig = field(default_factory=RetrieveConfig)
     qa: QaConfig = field(default_factory=QaConfig)
@@ -407,6 +410,9 @@ def load_domain(name: str, cfg: Config | None = None) -> DomainProfile:
     profile.clause_patterns = list(data.get("clause_patterns", []))
     profile.table_cues = list(data.get("table_cues", []))
     profile.citation_template = data.get("citation_template", profile.citation_template)
+    profile.docx_citation_template = data.get(
+        "docx_citation_template", profile.docx_citation_template
+    )
     _apply(data.get("chunk", {}), profile.chunk)
     _apply(data.get("retrieve", {}), profile.retrieve)
     _apply(data.get("qa", {}), profile.qa)

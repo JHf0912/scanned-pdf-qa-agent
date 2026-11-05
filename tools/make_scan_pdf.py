@@ -12,7 +12,7 @@
 用法
 ----
     uv run python tools/make_scan_pdf.py --images data/raw/gbt1568_p*.png \
-                                        --out data/raw/gbt1568_scan.pdf --dpi 200
+                                        --out data/raw/gbt1568_scan.pdf --jpeg-quality 85
 """
 
 from __future__ import annotations

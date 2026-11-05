@@ -7,6 +7,7 @@
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
@@ -18,6 +19,10 @@ PageKind = Literal["TEXT", "SCANNED", "HYBRID"]
 BlockType = Literal[
     "heading", "paragraph", "clause", "table", "figure", "stamp", "header", "footer"
 ]
+# 定位方式。PDF 有页，DOCX 没有页（Word 页码取决于排版），所以 DOCX 用
+# 「文档顺序第 n 个非空正文块」定位。两种来源共用同一套 Chunk/Citation，
+# 但引用格式与证据头必须按这个字段分支——不能假装 DOCX 也有页。
+LocatorKind = Literal["page", "paragraph"]
 
 
 class RefusalReason(str, Enum):
@@ -45,6 +50,31 @@ class CheckSeverity(str, Enum):
 
     GATE = "gate"
     ADVISORY = "advisory"
+
+
+# ---------------------------------------------------------------- 展示净化
+
+# C0/C1 控制字符（保留 \n 与 \t）+ bidi 控制符（U+202A–202E、U+2066–2069）。
+#
+# 模型输出与扫描文档都是**不可信输入**：ESC/OSC 序列会被终端解释
+# （颜色、光标、OSC 52 剪贴板），bidi 覆盖符会让展示顺序与逻辑顺序不一致
+# （视觉欺骗）。JSON/前端数据里也会原样保留。净化只删除控制字符，
+# 不改文本语义，所以 strict 路径也适用。
+_CONTROL_CHARS_RE = re.compile(
+    r"[\x00-\x08\x0b-\x1f\x7f-\x9f‪-‮⁦-⁩]"
+)
+
+
+def sanitize_display_text(text: str | None) -> str | None:
+    """剥离 C0/C1 与 bidi 控制字符，保留换行与制表符。
+
+    API、CLI、报告与 `AnswerBundle.to_dict()` 共用同一个入口：展示层净化
+    只能有一份实现，否则总有一处会漏。API/CLI 本地再净化一次是无害的
+    幂等纵深。
+    """
+    if text is None:
+        return None
+    return _CONTROL_CHARS_RE.sub("", text)
 
 
 # ---------------------------------------------------------------- 计量
@@ -134,7 +164,14 @@ class PageProfile:
 
 
 @dataclass
-class PdfProfile:
+class SourceProfile:
+    """一份来源文档的类型判定与统计。
+
+    名字刻意不叫 `PdfProfile`：DOCX 也会走同一个产物结构（`profile.json`），
+    沿用 PDF 的名字会变成一句假话。`PdfProfile = SourceProfile` 保留为兼容别名，
+    旧调用点与旧产物无需改动。
+    """
+
     path: Path
     sha256: str
     page_count: int
@@ -143,6 +180,9 @@ class PdfProfile:
     # 交叉引擎结果，例如 {"pymupdf_chars": 0, "pdftotext_chars": 0, "pdftotext_available": 1}
     # 两个独立抽取器都给出 0 字符，比单个引擎的阈值判定硬得多。
     cross_engine: dict[str, float] = field(default_factory=dict)
+    source_type: Literal["pdf", "docx"] = "pdf"
+    # DOCX 的非空正文块数（¶n 的上界）；PDF 恒为 0。
+    unit_count: int = 0
 
     def to_dict(self) -> dict:
         return {
@@ -151,8 +191,14 @@ class PdfProfile:
             "page_count": self.page_count,
             "kind": self.kind,
             "cross_engine": self.cross_engine,
+            "source_type": self.source_type,
+            "unit_count": self.unit_count,
             "pages": [p.to_dict() for p in self.pages],
         }
+
+
+# 兼容别名：机械改名，旧代码/旧产物零改动。
+PdfProfile = SourceProfile
 
 
 # ---------------------------------------------------------------- 页图
@@ -167,6 +213,39 @@ class PageImage:
     dpi: float
     native: bool  # True = 位精确取自内嵌图像，未经重采样
     upscale: float = 1.0  # 相对原生尺寸的放大倍数（用于 A/B 实验留痕）
+
+
+@dataclass(frozen=True)
+class BBox:
+    """引用在**页图上的位置**，用相对页面的比例坐标（0~1）表示。
+
+    为什么用比例而不是像素 / PDF 点
+    -------------------------------
+    不同 OCR 引擎给出的 `OcrBlock.bbox` 单位并不相同：
+    VLM / fixture 引擎给的是**页图像素坐标**，原生文本层引擎（PyMuPDF）
+    给的是**PDF 点坐标（72 dpi）**。如果原样透传给前端，前端就必须知道
+    每一页用了哪个引擎、图是按多少 dpi 渲染的，才能把框画对——任何一处
+    upscale / 重采样都会让框整体偏移。
+
+    所以在装载阶段就统一换算成"占页面的比例"，前端只用 `viewBox="0 0 1 1"`
+    的 SVG 覆盖在同一张图上，缩放、响应式、缩略图都不需要再重算坐标。
+    `page_no` 保留，因为一个 chunk 可能跨页（引用高亮只取被引页）。
+    """
+
+    page_no: int
+    x0: float
+    y0: float
+    x1: float
+    y1: float
+
+    def to_dict(self) -> dict:
+        return {
+            "page_no": self.page_no,
+            "x0": round(self.x0, 5),
+            "y0": round(self.y0, 5),
+            "x1": round(self.x1, 5),
+            "y1": round(self.y1, 5),
+        }
 
 
 # ---------------------------------------------------------------- OCR 产物
@@ -330,7 +409,7 @@ class Chunk:
 
     chunk_id: str
     doc_id: str
-    page_no: int
+    page_no: int | None
     ordinal: int
     kind: Literal["clause", "paragraph", "table", "heading"]
     text: str
@@ -339,6 +418,17 @@ class Chunk:
     table_id: str | None = None
     block_ids: tuple[str, ...] = ()
     char_len: int = 0
+    # --- 定位（PDF 按页 / DOCX 按段落）---
+    # 新字段全部带默认值，旧构造调用（位置参数或关键字）保持可用。
+    locator_kind: LocatorKind = "page"
+    # DOCX：裸条号优先、否则标题。引用校验仍用 clause_label，不用这个字段。
+    section: str | None = None
+    # DOCX：¶n = 文档顺序第 n 个非空正文块（段落或线性化表格；标题计入）。
+    para_no: int | None = None
+    para_end: int | None = None
+    # 该片段在页图上的位置（比例坐标）。PDF 扫描页用于页图高亮；
+    # DOCX / 文本层页通常为空——那时前端退回纯文本高亮，不假装有页图。
+    bboxes: tuple[BBox, ...] = ()
 
     def to_dict(self) -> dict:
         return {
@@ -353,6 +443,11 @@ class Chunk:
             "table_id": self.table_id,
             "block_ids": list(self.block_ids),
             "char_len": self.char_len,
+            "locator_kind": self.locator_kind,
+            "section": self.section,
+            "para_no": self.para_no,
+            "para_end": self.para_end,
+            "bboxes": [b.to_dict() for b in self.bboxes],
         }
 
 
@@ -368,6 +463,17 @@ class RetrievalHit:
 
 # ---------------------------------------------------------------- 问答
 
+# 回答范围模式。
+#
+# `strict`：答案只能来自检索到的证据，逐句引用——既有行为，也是默认。
+# `hybrid` ：文档能支持的内容仍逐句引用；文档没有的内容单独放在
+#            `【模型知识补充】` 段，禁止引用、禁止声称文档写了。
+# `free`   ：不受文档限制——不检索、不引用、不拒答，直接由生成模型自由作答。
+#
+# 这是一个**显式可选**的模式，不是默认降级：没有生成模型时 hybrid 与 free 都
+# 不可用，绝不允许静默退回 strict（那会让界面写的模式和实际返回的模式对不上）。
+AnswerMode = Literal["strict", "hybrid", "free"]
+
 # 引用渲染的默认模板。`citation_template` 在 domain profile 里可覆盖，
 # 由 `Citation.render(template=...)` 使用——模板是**场景配置**的一部分，
 # 不是写死的字符串（公文用「第X条」、标准用「§3.6」、合同可能要「附件二」）。
@@ -376,6 +482,29 @@ DEFAULT_CITATION_TEMPLATE = "[p.{page} §{clause}]"
 FALLBACK_CITATION_TEMPLATE = "[p.{page} ¶{para}]"
 BARE_CITATION_TEMPLATE = "[p.{page}]"
 
+# DOCX 的引用模板。DOCX 没有页，引用一律按「条号 + 段落号」定位。
+# `¶n` 的定义见 docs/design.md：文档顺序第 n 个**非空正文块**，
+# 不是 Word 段落数（Word 的页码/段落编号取决于排版，无法稳定复现）。
+DOCX_CITATION_TEMPLATE = "[§{section} ¶{para}]"
+DOCX_NO_SECTION_TEMPLATE = "[¶{para}]"
+DOCX_NO_PARA_TEMPLATE = "[§{section}]"
+# 连条号与段落号都没有时的最后兜底。宁可显示「?」，也不能产出
+# `[p.None]`——那看起来像引用，实际不可定位。
+UNKNOWN_CITATION_TEMPLATE = "[?]"
+
+
+def sanitize_section(text: str | None) -> str | None:
+    """把 section 压成可安全放进 `[...]` 的单行串。
+
+    引用是方括号语法：section 里若带 `]` 或换行，会提前截断引用、
+    或在渲染/解析两端产生两种不同的字符串。原始标题仍保留在
+    `clause_path` / block 里，这里只处理"用于引用显示"的值。
+    """
+    if text is None:
+        return None
+    cleaned = " ".join(text.replace("]", "").split())
+    return cleaned or None
+
 
 @dataclass(frozen=True)
 class Citation:
@@ -383,9 +512,15 @@ class Citation:
 
     短公文可能整篇无标题结构，此时条款切分会退化成句子窗口。
     如果引用格式强制要求条号，这类文档的引用就会崩掉。
+
+    双定位
+    ------
+    `locator_kind="page"`（PDF）：`[p.3 §3.6]` / `[p.3 ¶12]` / `[p.3]`。
+    `locator_kind="paragraph"`（DOCX）：`[§3.6 ¶4]` / `[¶4]` / `[§3.6]`。
+    DOCX 永远不该出现页码。
     """
 
-    page_no: int
+    page_no: int | None
     clause_label: str | None
     chunk_id: str
     quote: str
@@ -393,32 +528,93 @@ class Citation:
     # 来源文档。多文档检索时，两份文件的"第 3 页"是两回事，
     # 引用里必须能区分它们——否则读者无法回到正确的那一份。
     doc_id: str | None = None
+    locator_kind: LocatorKind = "page"
+    # DOCX 的条号/标题。渲染用它；校验仍用 clause_label。
+    section: str | None = None
+    # 引用所覆盖的段落号上界（DOCX）。前端用它显示 `¶4–5` 这类范围；
+    # PDF 与单段引用为 None。
+    para_end: int | None = None
+    # 这条引用实际覆盖的证据 chunk 集合。DOCX 的超长段落会被切成多片，
+    # 它们共享同一个 `[§1 ¶2]`；只认第一片会让后续片里的数值被判成幻觉。
+    # 单 chunk（含全部 PDF 路径）时为 `(chunk_id,)`。
+    evidence_chunk_ids: tuple[str, ...] = ()
+    # 引用在页图上的位置（比例坐标）。来源 chunk 的 bboxes，前端据此画高亮框。
+    bboxes: tuple[BBox, ...] = ()
 
-    def render(self, template: str | None = None) -> str:
+    def render(self, template: str | None = None,
+               docx_template: str | None = None) -> str:
         """渲染成人类可读的引用。
 
         Args:
-            template: 形如 `"[p.{page} §{clause}]"` 的模板，通常来自
+            template: PDF 模板，形如 `"[p.{page} §{clause}]"`，通常来自
                 `domain.citation_template`。为 None 时用默认模板。
+            docx_template: DOCX 模板，形如 `"[§{section} ¶{para}]"`，
+                通常来自 `domain.docx_citation_template`。
                 **模板里出现 `{doc}` 且本引用带 doc_id 时**会插入来源文档名，
                 这是多文档场景下区分引用的唯一方式。
-        """
-        tpl = template or DEFAULT_CITATION_TEMPLATE
-        doc = self.doc_id or ""
-        # 模板里带了 {doc} 却没给 doc_id：不能留一个空槽，退回默认形式。
-        if "{doc}" in tpl and not doc:
-            tpl = tpl.replace("{doc}", "").replace("  ", " ").replace(" §", "§").strip()
 
+        所有模板都会拿到完整的 `page/section/para/clause/doc` 五个槽位，
+        自定义模板不会因为缺关键字抛 `KeyError`。
+        """
+        doc = self.doc_id or ""
+        if self.locator_kind == "paragraph":
+            return self._render_paragraph(docx_template, doc)
+        # PDF 引用但没有页码（例如旧产物字段缺失、或混合来源的边界情况）：
+        # **绝不产出 `p.None`**，降级到段落分支；连段落号也没有就显示 `[?]`。
+        if self.page_no is None:
+            return self._render_paragraph(docx_template, doc)
+        return self._render_page(template, doc)
+
+    # ------------------------------------------------------------ 内部
+
+    def _render_page(self, template: str | None, doc: str) -> str:
         if self.clause_label:
-            out = tpl.format(page=self.page_no, clause=self.clause_label,
-                             doc=doc, para=self.para_no or "")
-            return out
+            tpl = _prepare_template(template or DEFAULT_CITATION_TEMPLATE, doc)
+            return _format_citation(tpl, self, doc)
         if self.para_no:
-            return FALLBACK_CITATION_TEMPLATE.format(
-                page=self.page_no, para=self.para_no, doc=doc, clause=""
-            )
-        return BARE_CITATION_TEMPLATE.format(page=self.page_no, doc=doc, clause="",
-                                             para="")
+            tpl = _prepare_template(FALLBACK_CITATION_TEMPLATE, doc)
+            return _format_citation(tpl, self, doc)
+        tpl = _prepare_template(BARE_CITATION_TEMPLATE, doc)
+        return _format_citation(tpl, self, doc)
+
+    def _render_paragraph(self, docx_template: str | None, doc: str) -> str:
+        section = sanitize_section(self.section or self.clause_label)
+        para = self.para_no
+        if section and para:
+            tpl = docx_template or DOCX_CITATION_TEMPLATE
+        elif para:
+            tpl = DOCX_NO_SECTION_TEMPLATE
+        elif section:
+            tpl = DOCX_NO_PARA_TEMPLATE
+        else:
+            return UNKNOWN_CITATION_TEMPLATE
+        return _format_citation(_prepare_template(tpl, doc), self, doc, section=section)
+
+
+def _prepare_template(tpl: str, doc: str) -> str:
+    """模板里带了 `{doc}` 却没给 doc_id：不能留一个空槽，退回默认形式。"""
+    if "{doc}" in tpl and not doc:
+        return tpl.replace("{doc}", "").replace("  ", " ").replace(" §", "§").strip()
+    return tpl
+
+
+def _format_citation(
+    tpl: str, citation: Citation, doc: str, *, section: str | None = None
+) -> str:
+    """统一格式化入口：**永远传齐五个槽位**。
+
+    段落定位没有页码时 `{page}` 给空串而不是 `None`——自定义模板也不该
+    渲染出 "None"。`section` 会清洗掉 `]` 与换行，避免破坏 `[...]` 语法。
+    """
+    return tpl.format(
+        page=citation.page_no if citation.page_no is not None else "",
+        section=sanitize_section(
+            section if section is not None else citation.section
+        ) or "",
+        para=citation.para_no if citation.para_no is not None else "",
+        clause=citation.clause_label or "",
+        doc=doc,
+    )
 
 
 @dataclass(frozen=True)
@@ -500,14 +696,28 @@ class AnswerBundle:
     # 渲染引用用的模板（来自领域配置）。对外序列化时一并给出"渲染后"的字符串，
     # 前端与报告直接显示它，不需要自己再去拼一遍格式。
     citation_template: str | None = None
+    # DOCX 的引用模板。PDF 与 DOCX 可能混在一次回答里，两套模板都要带上。
+    docx_citation_template: str | None = None
+    # --- 回答范围模式（见 docs/reviews/2026-10-31-hybrid-mode-contract.md）---
+    # 回答生成时实际使用的模式。前端按它显示模式 chip，**不按当前开关**——
+    # 切换只影响下一问，已经显示出来的答案必须保留生成时的模式。
+    answer_mode: AnswerMode = "strict"
+    # 只含补充段（已经剥离引用）；strict 恒为 None。
+    # 它**不是证据**：`answer` 仍只放文档正文，`citations` 也只来自文档正文。
+    model_knowledge: str | None = None
+    # 实际出现了非空补充段。前端据此决定是否渲染独立的补充区块。
+    knowledge_used: bool = False
 
     def to_dict(self) -> dict:
         return {
             "question": self.question,
-            "answer": self.answer,
+            "answer": sanitize_display_text(self.answer),
+            "answer_mode": self.answer_mode,
+            "model_knowledge": sanitize_display_text(self.model_knowledge),
+            "knowledge_used": self.knowledge_used,
             "refused": self.refused,
             "refusal_reason": self.refusal_reason.value if self.refusal_reason else None,
-            "refusal_detail": self.refusal_detail,
+            "refusal_detail": sanitize_display_text(self.refusal_detail),
             "attempts": self.attempts,
             "citations": [
                 {
@@ -515,14 +725,25 @@ class AnswerBundle:
                     "clause_label": c.clause_label,
                     "chunk_id": c.chunk_id,
                     "doc_id": c.doc_id,
-                    "quote": c.quote,
-                    "rendered": c.render(self.citation_template),
+                    "quote": sanitize_display_text(c.quote),
+                    # 前端按 locator 分支显示：PDF「第 N 页」，DOCX「§... ¶...」。
+                    # 这四个字段是契约的一部分，不能只给渲染后的字符串。
+                    "locator_kind": c.locator_kind,
+                    "section": c.section,
+                    "para_no": c.para_no,
+                    "para_end": c.para_end,
+                    "evidence_chunk_ids": list(c.evidence_chunk_ids),
+                    "bboxes": [b.to_dict() for b in c.bboxes],
+                    "rendered": c.render(self.citation_template,
+                                         self.docx_citation_template),
                 }
                 for c in self.citations
             ],
             "candidates": [
-                {"interpretation": c.interpretation, "value": c.value,
-                 "citation": c.citation.render(self.citation_template)}
+                {"interpretation": sanitize_display_text(c.interpretation),
+                 "value": sanitize_display_text(c.value),
+                 "citation": c.citation.render(self.citation_template,
+                                               self.docx_citation_template)}
                 for c in self.candidates
             ],
             "verification": self.verification.to_dict(),
@@ -531,7 +752,7 @@ class AnswerBundle:
                 for h in self.hits
             ],
             "trace": [
-                {"step": t.step, "detail": t.detail, "ms": t.ms,
+                {"step": t.step, "detail": sanitize_display_text(t.detail), "ms": t.ms,
                  "usage": t.usage.to_dict() if t.usage else None}
                 for t in self.trace
             ],

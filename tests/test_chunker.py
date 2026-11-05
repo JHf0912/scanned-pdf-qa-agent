@@ -58,6 +58,46 @@ class TestDegradation:
         assert all(c.clause_label == "5.1" for c in clause_chunks)
 
 
+class TestPageBoundarySplit:
+    """一个 section 不跨页：跨页会同时破坏引用页码、页图 bbox 与检索。
+
+    回归本源：GB/T 1568 的前言页（page 2）正文被并进了封面所在的 section，
+    导致 page 2 一个 chunk 都没有，"历次版本 1979/1997" 检索不到、被误拒。
+    """
+
+    def test_unlabeled_section_does_not_swallow_next_page(self, standard_profile):
+        """封面（无条号）+ 前言（无条号）必须各自成片、各自落在自己的页。"""
+        page1 = make_page(
+            [make_block(0, "paragraph", "某某标准封面 2008-09-22 发布", page=1)], page_no=1
+        )
+        page2 = make_page(
+            [make_block(0, "paragraph", "本标准所代替标准的历次版本为 GB 1568—1979。", page=2)],
+            page_no=2,
+        )
+        chunks, _ = chunk_document([page1, page2], "d", standard_profile)
+        assert any(c.page_no == 2 for c in chunks), (
+            "前言页没有独立 chunk——它被并进了上一页的 section"
+        )
+        assert any("1979" in c.text for c in chunks if c.page_no == 2)
+
+    def test_clause_spanning_pages_split_but_keeps_label(self, standard_profile):
+        """跨页的同一 clause 拆成两条、各自定位到自己的页，但条号都保留。"""
+        page1 = make_page(
+            [make_block(0, "clause", "3.6 斜度公差", "3.6", page=1),
+             make_block(1, "paragraph", "第一页的正文，未写完……", page=1)],
+            page_no=1,
+        )
+        page2 = make_page(
+            [make_block(0, "paragraph", "第二页的续写：角度公差按 AT8 级选取。", page=2)],
+            page_no=2,
+        )
+        chunks, _ = chunk_document([page1, page2], "d", standard_profile)
+        p1 = [c for c in chunks if c.page_no == 1 and c.clause_label == "3.6"]
+        p2 = [c for c in chunks if c.page_no == 2 and c.clause_label == "3.6"]
+        assert p1 and p2, "跨页条款应拆成两条、且都保留 3.6 条号"
+        assert "AT8" in p2[0].text
+
+
 class TestSentenceSplit:
     def test_splits_on_chinese_punctuation(self):
         assert len(split_sentences("第一句。第二句！第三句？")) == 3

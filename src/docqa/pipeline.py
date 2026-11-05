@@ -1,31 +1,40 @@
-"""ingest 编排：PDF → 类型判定 → 渲染 → OCR → 切分 → 索引 → 落盘。
+"""ingest 编排：PDF → 判定 → 渲染 → OCR → 切分 → 索引 → 落盘；
+DOCX → 原生文本解析 → 切分 → 索引 → 落盘。
 
 这个模块把各阶段串起来，同时负责三件容易被忽略、但决定"能不能定位问题"的事：
 
 1. **每一步的产物都单独落盘。** `profile.json` / `pages/` / `ocr.json` /
    `chunks.jsonl` / `manifest.json` 各自独立。出了问题能一眼看出是哪一步的锅，
-   而不是面对一个"跑完了但结果不对"的黑盒。
+   而不是面对一个"跑完了但结果不对"的黑盒。DOCX 另有 `docx_blocks.jsonl`
+   （报告 P0-31：文本丢失必须能被独立复算）。
 2. **manifest 记录全部证据。** 判定信号、渲染参数与页图哈希、OCR 溯源、
    切分统计、耗时。复现与审计都靠它。
 3. **失败隔离。** 单页 OCR 失败只标记该页，流程继续；但凡是证据涉及该页的问题，
    一律以 `EXTRACTION_FAILED` 拒答——**绝不用不完整的证据去回答**。
+
+PDF 与 DOCX 在 `assert_not_golden()` 之后**分派**成两条独立的路。
+DOCX 不经过 detect / render / OCR：它是原生文本，没有"页"这个概念，
+把它交给 PyMuPDF 只会崩掉，或者更糟——假装它有页。
 """
 
 from __future__ import annotations
 
+import hashlib
 import json
 import time
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from pathlib import Path
+from typing import Literal
 
 from .chunker import chunk_document
 from .config import Config, DomainProfile
 from .detect import pages_needing_ocr, profile_pdf
+from .docx import DocxDocument, build_docx_chunks, is_docx, parse_docx, validate_docx
 from .errors import ConfigError, InputError, PageOcrError
 from .index import HybridIndex
-from .injection import scan_pages
+from .injection import InjectionReport, scan_pages, scan_text
 from .logging import get_logger, stage
-from .models import Chunk, OcrPage, PageImage, PdfProfile
+from .models import BBox, Chunk, OcrBlock, OcrPage, PageImage, SourceProfile
 from .ocr import OcrEngine
 from .ocr.spotcheck import spotcheck_page
 from .ocr.textlayer import TextLayerEngine
@@ -34,18 +43,32 @@ from .render import render_pages
 
 _log = get_logger("pipeline")
 
+SourceType = Literal["pdf", "docx"]
+
+# 来源判定用的文件头。与 `docx.security` 保持同一组常量语义：
+# 判定只决定"交给哪条路"，真正的安全校验在各自的解析器入口。
+_PDF_MAGIC = b"%PDF-"
+_ZIP_MAGIC = b"PK\x03\x04"
+_EMPTY_ZIP_MAGIC = b"PK\x05\x06"
+# 旧版 .doc / .docm / .dotx：本工具一律不支持，但必须给"另存为"的出路。
+_LEGACY_WORD_SUFFIXES = (".doc", ".docm", ".dotm", ".dotx")
+# 单个正文块最多记多少条注入命中。与 `injection.scan_pages()` 的每页上限一致：
+# 恶意构造的长文档可以把 manifest 撑爆，而"截断"必须有日志、不能静默。
+_MAX_INJECTION_HITS_PER_BLOCK = 20
+
 
 @dataclass
 class IngestResult:
     doc_id: str
     out_dir: Path
-    profile: PdfProfile
+    profile: SourceProfile
     pages: list[OcrPage]
     chunks: list[Chunk]
     index: HybridIndex
     manifest: dict
     # 单文档时是页码集合；多文档（`load_results`）时升级成 (doc_id, page_no)——
     # 两份文件的"第 3 页"是两回事。`QaAgent` 会把两种形态归一成后者。
+    # DOCX 没有页：它永远贡献空集，绝不插入 `None`。
     failed_pages: set[int] | set[tuple[str, int]]
 
     @property
@@ -53,8 +76,18 @@ class IngestResult:
         return sum(1 for p in self.pages if not p.failed)
 
 
-def _doc_id(profile: PdfProfile) -> str:
-    return f"{profile.path.stem}-{profile.sha256[:8]}"
+def _doc_id(profile: SourceProfile) -> str:
+    """由来源路径与内容哈希生成稳定的 `doc_id`。
+
+    普通文件：`<stem>-<sha8>`（旧行为，CLI 直接 ingest 的路径不变）。
+    上传的存储名已经是 `<stem>-<sha256[:32]><ext>`：此时**不再追加** `-sha8`，
+    否则 id 会变成 `demo-<32>-<8>`，前端 `docTitle()` 直接展示 doc_id 时会
+    出现重复哈希。旧产物不受影响——`load_result()` 只读 manifest 里的 doc_id。
+    """
+    stem = profile.path.stem
+    if stem.endswith(f"-{profile.sha256[:32]}"):
+        return stem
+    return f"{stem}-{profile.sha256[:8]}"
 
 
 # 金标目录。**其中的内容绝不能成为管线输入。**
@@ -83,12 +116,66 @@ def assert_not_golden(path: Path) -> None:
                 f"把它们喂回管线，评估就变成了用答案考试——而且指标会变得很好看，\n"
                 f"没有任何迹象表明出了问题。\n"
                 f"\n"
-                f"请把待解析的 PDF 放在 data/raw/ 下。"
+                f"请把待解析的 PDF / DOCX 放在 data/raw/ 下。"
             )
 
 
+def source_type_of(path: Path) -> SourceType:
+    """判断一份输入该走哪条路：PDF 还是 DOCX。
+
+    只看**扩展名 + 文件头**，不做深度校验——安全校验各自在
+    `profile_pdf()` / `validate_docx()` 里完成，这里只负责分派。
+    但"看起来不像任何一种"必须在这里拒绝：把它硬塞给 PyMuPDF 或 ZIP 解析器，
+    用户拿到的会是一句第三方库的内部报错，而不是"该另存为什么格式"。
+
+    Raises:
+        InputError: 文件读不了，或是本工具不支持的格式。
+    """
+    name = path.name.lower()
+    try:
+        with path.open("rb") as fh:
+            head = fh.read(8)
+    except OSError as exc:
+        raise InputError(
+            f"无法读取输入文件：{path}（{exc}）。请确认文件存在且当前用户可读。"
+        ) from exc
+
+    if name.endswith(".pdf") or head.startswith(_PDF_MAGIC):
+        return "pdf"
+    if name.endswith(".docx"):
+        return "docx"
+    if name.endswith(_LEGACY_WORD_SUFFIXES):
+        # 复用 `docx.security` 的措辞（含"另存为 → .docx"的出路），
+        # 避免同一类拒绝理由在管线层与解析层各写一份、日后漂移。
+        # 该函数先查扩展名、后查文件头，所以传空字节不会影响这条分支。
+        validate_docx(b"", filename=path.name)
+        raise InputError(f"不支持的文件类型：{path.name}")  # pragma: no cover - 上面必抛
+    if head.startswith(_ZIP_MAGIC) or head.startswith(_EMPTY_ZIP_MAGIC):
+        try:
+            data = path.read_bytes()
+        except OSError as exc:
+            raise InputError(f"无法读取输入文件：{path}（{exc}）") from exc
+        if is_docx(data):
+            return "docx"
+        raise InputError(
+            f"这是一个 ZIP 包，但不是 DOCX：{path.name}\n"
+            "DOCX 必须包含 word/document.xml。\n"
+            "如果这原本是 Word 文档，请用 Word/WPS「另存为 → .docx」后重试。"
+        )
+
+    raise InputError(
+        f"不支持的文件类型：{path.name}\n"
+        "\n"
+        "本工具支持两种来源：\n"
+        "  - PDF（.pdf）：扫描件会走 OCR，原生文本 PDF 直接取文本层；\n"
+        "  - DOCX（.docx）：Word 原生文本，不需要 OCR，也不需要渲染。\n"
+        "\n"
+        "旧版 .doc 是 OLE 复合文档，无法解析；请用 Word/WPS「另存为 → .docx」后重试。"
+    )
+
+
 def ingest(
-    pdf_path: Path,
+    path: Path,
     *,
     cfg: Config,
     domain: str,
@@ -98,23 +185,49 @@ def ingest(
     out_root: Path | None = None,
     force: bool = False,
 ) -> IngestResult:
-    """跑完一次 ingest。
+    """跑完一次 ingest（按来源分派到 PDF / DOCX 两条路）。
 
     Args:
         domain: 业务场景名，用于装载 domain profile。
         engine: OCR 引擎；None 时由调用方（CLI）按配置构造并传入。
+            **DOCX 不需要它**，传了也不会被调用。
         engine2: 可选的第二 OCR 引擎，用于跨引擎一致性校验。
             给了就逐页再识别一遍并比对高风险字段，差异写回块级 `needs_review`。
             **成本翻倍**，所以默认不启用——它防的是"证据本身被识别错"，
             与自检防的"生成阶段幻觉"是两套机制，按风险预算决定是否开启。
         force: 忽略缓存强制重新识别（用于验证缓存之外的实跑结果）。
+            这只对 PDF 有意义；DOCX 没有 OCR 缓存可清。
     """
     from .config import load_domain
 
-    assert_not_golden(pdf_path)  # 金标内容绝不作为管线输入
+    assert_not_golden(path)  # 金标内容绝不作为管线输入
     started = time.time()
     dom = profile or load_domain(domain, cfg)
 
+    if source_type_of(path) == "docx":
+        return _ingest_docx(path, cfg=cfg, dom=dom, out_root=out_root, started=started)
+    return _ingest_pdf(
+        path,
+        cfg=cfg,
+        dom=dom,
+        engine=engine,
+        engine2=engine2,
+        out_root=out_root,
+        started=started,
+    )
+
+
+def _ingest_pdf(
+    pdf_path: Path,
+    *,
+    cfg: Config,
+    dom: DomainProfile,
+    engine: OcrEngine | None,
+    engine2: OcrEngine | None,
+    out_root: Path | None,
+    started: float,
+) -> IngestResult:
+    """PDF 路径：判定 → 渲染 → OCR → 切分 → 索引 → 落盘。"""
     # --- 1. 类型判定 ---
     with stage("detect", _log, doc=pdf_path.name) as info:
         pdf_profile = profile_pdf(pdf_path)
@@ -161,26 +274,8 @@ def ingest(
     )
 
     # --- 3. OCR（逐页失败隔离）---
-    pages: list[OcrPage] = []
-    failed: set[int] = set()
-    profiles_by_page = {p.page_no: p for p in pdf_profile.pages}
-
-    # 原实现这里只打了一条"跳过识别"的日志，然后照样调用 `engine.ocr_page()`，
-    # 于是 `engine=None` 时必然 `AttributeError`——**日志承诺的行为和代码做的事相反**。
     #
-    # 现在明确区分两种情况：
-    # - 没有待识别的页（纯文本 PDF）：引擎无关紧要，正常继续；
-    # - 有待识别的页却没有引擎：这是调用方的错误，直接报出来，
-    #   而不是让它以 AttributeError 的形式在几十行之后炸掉。
-    if engine is None and targets:
-        raise ConfigError(
-            f"有 {len(targets)} 页需要 OCR（{targets}），但没有提供 OCR 引擎。\n"
-            f"请通过 CLI 运行 `docqa ingest`，或由调用方显式传入引擎。"
-        )
-
-    # --- 3. 逐页取内容（按页类型选来源，失败隔离）---
-    #
-    # 两条来源，**同一套产物格式**：
+    # 两种来源，**同一套产物格式**：
     #   - 有文本层的页 → `TextLayerEngine`（零模型调用，取 PDF 原生文本层）；
     #   - 没有文本层的页 → 传入的 OCR 引擎（VLM / fixture）。
     #
@@ -188,20 +283,22 @@ def ingest(
     # TEXT 页既不渲染也不识别，于是纯 born-digital PDF 切出 0 个片段，
     # 混合件里文本层那几页整页丢失——而 detect.py 明明把它们判成了 TEXT。
     # "不送 OCR"这个正确的决定，当时等于"直接丢掉"。
+    #
+    # 需要 OCR 却没有引擎：这是调用方的错误，直接报出来，而不是让它以
+    # AttributeError 的形式在几十行之后炸掉。没有待识别页时引擎无关紧要，
+    # 所以只在 `targets` 非空时报——"一页都不需要识别"是一个有效结论。
+    if engine is None and targets:
+        raise ConfigError(
+            f"有 {len(targets)} 页需要 OCR（{targets}），但没有提供 OCR 引擎。\n"
+            f"请通过 CLI 运行 `docqa ingest`，或由调用方显式传入引擎。"
+        )
+
     text_engine = TextLayerEngine(pdf_path)
     pages: list[OcrPage] = []
     failed: set[int] = set()
     by_text_layer: list[int] = []
     profiles_by_page = {p.page_no: p for p in pdf_profile.pages}
     images_by_page = {img.page_no: img for img in images}
-
-    # 需要 OCR 却没有引擎：这是调用方的错误，直接报出来，
-    # 而不是让它以 AttributeError 的形式在几十行之后炸掉。
-    if engine is None and targets:
-        raise ConfigError(
-            f"有 {len(targets)} 页需要 OCR（{targets}），但没有提供 OCR 引擎。\n"
-            f"请通过 CLI 运行 `docqa ingest`，或由调用方显式传入引擎。"
-        )
 
     def _failed_page(page_no: int, sha: str, exc: Exception) -> OcrPage:
         """单页失败的统一产物：记录、继续，但不让下游拿到不完整的证据。"""
@@ -351,9 +448,7 @@ def ingest(
     with stage("chunk", _log, doc=doc_id) as info:
         chunks, chunk_stats = chunk_document(pages, doc_id, dom)
         info["detail"] = f"{len(chunks)} 个片段"
-    with (out_dir / "chunks.jsonl").open("w", encoding="utf-8") as fh:
-        for chunk in chunks:
-            fh.write(json.dumps(chunk.to_dict(), ensure_ascii=False) + "\n")
+    _write_chunks(out_dir, chunks)
 
     # --- 5. 索引 ---
     index = HybridIndex(chunks, dom)
@@ -365,6 +460,8 @@ def ingest(
             "path": str(pdf_path),
             "sha256": pdf_profile.sha256,
             "page_count": pdf_profile.page_count,
+            "source_type": "pdf",
+            "unit_count": 0,
         },
         "domain": dom.name,
         "detect": {
@@ -419,6 +516,194 @@ def ingest(
     )
 
 
+def _write_chunks(out_dir: Path, chunks: list[Chunk]) -> None:
+    """写 `chunks.jsonl`。PDF 与 DOCX 共用，避免两套写盘格式悄悄漂移。"""
+    with (out_dir / "chunks.jsonl").open("w", encoding="utf-8") as fh:
+        for chunk in chunks:
+            fh.write(json.dumps(chunk.to_dict(), ensure_ascii=False) + "\n")
+
+
+def _write_docx_blocks(out_dir: Path, document: DocxDocument) -> None:
+    """写 `docx_blocks.jsonl`：每个非空正文块一行。
+
+    `block_id`（`b¶n`）与 `Chunk.block_ids` 用的是同一套编号，评估层据此
+    可以**独立复算**"每个正文块都被某个片段覆盖"——不必相信切分器的自述。
+    """
+    with (out_dir / "docx_blocks.jsonl").open("w", encoding="utf-8") as fh:
+        for block in document.blocks:
+            row = {"block_id": f"b{block.para_no}", **block.to_dict()}
+            fh.write(json.dumps(row, ensure_ascii=False) + "\n")
+
+
+def _scan_docx_injection(document: DocxDocument) -> InjectionReport:
+    """逐正文块做注入扫描。
+
+    DOCX 的正文与扫描件一样不可信；`locator="paragraph"` 让命中显示 `¶n`，
+    而不是「第 0 页」这种在 DOCX 上没有意义的位置。
+    """
+    report = InjectionReport(
+        scanned=True, locator="paragraph", units_scanned=len(document.blocks)
+    )
+    for block in document.blocks:
+        if not block.text.strip():
+            continue
+        hits = scan_text(
+            block.text, page_no=0, locator="paragraph", para_no=block.para_no
+        )
+        # 与 PDF 的 `scan_pages()` 同一道闸：单块命中过多就截断。
+        # 一个恶意构造的长文档能把 manifest 撑到不可用的体积，
+        # 而"截断过"必须留日志痕迹，不能悄悄丢。
+        if len(hits) > _MAX_INJECTION_HITS_PER_BLOCK:
+            _log.warning(
+                "该正文块命中过多可疑片段，已截断",
+                extra={
+                    "detail": f"¶{block.para_no}，共 {len(hits)} 条，"
+                              f"只保留前 {_MAX_INJECTION_HITS_PER_BLOCK} 条"
+                },
+            )
+            hits = hits[:_MAX_INJECTION_HITS_PER_BLOCK]
+        report.hits.extend(hits)
+    return report
+
+
+def _ingest_docx(
+    path: Path,
+    *,
+    cfg: Config,
+    dom: DomainProfile,
+    out_root: Path | None,
+    started: float,
+) -> IngestResult:
+    """DOCX 路径：原生文本解析 → 切分 → 索引 → 落盘。
+
+    与 PDF 的差别是结构性的，不是参数差别：
+
+    - **没有 detect / render / OCR**。DOCX 是原生文本，不需要判断类型、
+      不需要渲染页图、不需要模型识别。因此也不需要任何 OCR 配置，
+      在这台机器上"没配视觉模型"不该阻止 `docqa ingest x.docx`。
+    - **没有页**。`page_count=0`、`pages=[]`、`failed_pages=set()`；
+      定位靠 `¶n`（文档顺序第 n 个非空正文块），引用形如 `[§3.6 ¶4]`。
+    - **多一份 `docx_blocks.jsonl`**。它是"每个非空正文块都在某个片段里"
+      这条硬不变量的**可独立复算**依据——只靠内存断言，产物层面无从核对。
+    """
+    try:
+        data = path.read_bytes()
+    except OSError as exc:
+        raise InputError(
+            f"无法读取 DOCX 文件：{path}（{exc}）。请确认文件存在且当前用户可读。"
+        ) from exc
+    document = parse_docx(data, filename=path.name, profile=dom)
+    sha = hashlib.sha256(data).hexdigest()
+
+    profile = SourceProfile(
+        path=path,
+        sha256=sha,
+        page_count=0,
+        pages=[],
+        kind="TEXT",
+        source_type="docx",
+        unit_count=document.unit_count,
+    )
+    doc_id = _doc_id(profile)
+    out_dir = (out_root or cfg.cache_dir.parent) / doc_id
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    (out_dir / "profile.json").write_text(
+        json.dumps(profile.to_dict(), ensure_ascii=False, indent=2), encoding="utf-8"
+    )
+    # 这两个文件是"产物格式统一"的代价：下游（load_result / API / 报告）
+    # 不需要为 DOCX 学一套新的目录结构，只需读到的是空列表。
+    (out_dir / "ocr.json").write_text("[]", encoding="utf-8")
+    (out_dir / "pages.json").write_text("[]", encoding="utf-8")
+    _write_docx_blocks(out_dir, document)
+
+    # --- 注入扫描：逐正文块 ---
+    with stage("injection", _log, doc=path.name) as info:
+        injection = _scan_docx_injection(document)
+        info["detail"] = f"{injection.n_hits} 处可疑片段"
+
+    # --- 切分 ---
+    with stage("chunk", _log, doc=doc_id) as info:
+        chunks, chunk_stats = build_docx_chunks(document, doc_id, dom)
+        info["detail"] = f"{len(chunks)} 个片段"
+    _write_chunks(out_dir, chunks)
+
+    # --- 索引 ---
+    index = HybridIndex(chunks, dom)
+
+    # --- manifest ---
+    # `citation_mode` 是前端与报告用来选引用格式的开关。B 的切分器已经给了；
+    # 这里再兜一次，是因为"缺字段"会让读取端静默退回 PDF 模板，渲染出 `p.None`。
+    chunk_stats = dict(chunk_stats)
+    chunk_stats.setdefault(
+        "citation_mode", "clause" if document.stats.headings else "paragraph"
+    )
+    manifest = {
+        "doc_id": doc_id,
+        "source": {
+            "path": str(path),
+            "sha256": sha,
+            "source_type": "docx",
+            "page_count": 0,
+            "unit_count": document.unit_count,
+        },
+        "domain": dom.name,
+        "detect": {
+            "kind": "TEXT",
+            "not_applicable": "DOCX 原生文本，无需 PDF 类型判定",
+        },
+        "render": {"not_applicable": "DOCX 无页图"},
+        "ocr": {
+            "not_applicable": "DOCX 原生文本，未调用 OCR",
+            "engine": None,
+            "pages_total": 0,
+            "pages_failed": [],
+        },
+        "docx": {
+            **document.stats.to_dict(),
+            "security": asdict(document.security),
+            "unit_count": document.unit_count,
+        },
+        "chunk": chunk_stats,
+        "injection": injection.to_dict(),
+        "index": index.to_dict(),
+        "usage_total": {
+            "tokens_in": 0,
+            "tokens_out": 0,
+            "est_cost_usd": 0.0,
+            "latency_ms": 0,
+            "pages": 0,
+        },
+        "elapsed_s": round(time.time() - started, 2),
+    }
+    (out_dir / "manifest.json").write_text(
+        json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8"
+    )
+
+    _log.info(
+        "ingest 完成",
+        extra={
+            "doc": doc_id,
+            "elapsed_ms": int((time.time() - started) * 1000),
+            "detail": (
+                f"DOCX 原生文本，{document.unit_count} 个正文块，"
+                f"{len(chunks)} 片段，产物在 {out_dir}"
+            ),
+        },
+    )
+
+    return IngestResult(
+        doc_id=doc_id,
+        out_dir=out_dir,
+        profile=profile,
+        pages=[],
+        chunks=chunks,
+        index=index,
+        manifest=manifest,
+        failed_pages=set(),
+    )
+
+
 def _sum_usage(pages: list[OcrPage]) -> dict:
     tin = sum(p.usage.tokens_in for p in pages)
     tout = sum(p.usage.tokens_out for p in pages)
@@ -431,6 +716,48 @@ def _sum_usage(pages: list[OcrPage]) -> dict:
         "latency_ms": ms,
         "pages": len(pages),
     }
+
+
+def _page_bbox_normalizer(img_by_page: dict[int, dict], prov_by_page: dict[int, str]):
+    """把某一页的 `OcrBlock.bbox` 换算成相对页面的比例坐标（0~1）。
+
+    单位按引擎区分：文本层引擎给的是 PDF 点（72 dpi），其余引擎给的是
+    页图像素。见 `models.BBox` 的说明。换算用**服务端渲染的那张图**的
+    宽高/DPI，保证覆盖层与前端实际加载的图完全对齐。
+    """
+
+    def norm(block: OcrBlock) -> BBox | None:
+        im = img_by_page.get(block.page_no)
+        if im is None or block.bbox is None:
+            return None
+        w = float(im.get("width") or 0.0)
+        h = float(im.get("height") or 0.0)
+        if w <= 0 or h <= 0:
+            return None
+        try:
+            x0, y0, x1, y1 = (float(v) for v in block.bbox)
+        except (TypeError, ValueError):
+            return None
+        if "textlayer" in prov_by_page.get(block.page_no, ""):
+            dpi = float(im.get("dpi") or 0.0)
+            if dpi <= 0:
+                return None
+            divx, divy = w / dpi * 72.0, h / dpi * 72.0
+        else:
+            divx, divy = w, h
+        if divx <= 0 or divy <= 0:
+            return None
+
+        def clamp(v: float) -> float:
+            return min(max(v, 0.0), 1.0)
+
+        nx0, nx1 = clamp(min(x0, x1) / divx), clamp(max(x0, x1) / divx)
+        ny0, ny1 = clamp(min(y0, y1) / divy), clamp(max(y0, y1) / divy)
+        if nx1 - nx0 <= 1e-4 or ny1 - ny0 <= 1e-4:
+            return None
+        return BBox(page_no=block.page_no, x0=nx0, y0=ny0, x1=nx1, y1=ny1)
+
+    return norm
 
 
 def load_result(out_dir: Path, cfg: Config, domain: str) -> IngestResult:
@@ -446,17 +773,22 @@ def load_result(out_dir: Path, cfg: Config, domain: str) -> IngestResult:
     from .ocr.cache import _page_from_dict
 
     manifest = json.loads((out_dir / "manifest.json").read_text(encoding="utf-8"))
-    pages_raw = json.loads((out_dir / "ocr.json").read_text(encoding="utf-8"))
+    ocr_path = out_dir / "ocr.json"
+    # DOCX 产物会写 `[]`，但手写/裁剪过的旧产物可能压根没有这个文件。
+    # "没有 OCR 页"与"文件缺失"在这里是同一件事——都表示没有页级内容。
+    pages_raw = json.loads(ocr_path.read_text(encoding="utf-8")) if ocr_path.exists() else []
     pages = [_page_from_dict(d) for d in pages_raw]
 
     profile_path = out_dir / "profile.json"
     profile_data = json.loads(profile_path.read_text(encoding="utf-8"))
-    from .models import PageProfile, PdfProfile
+    from .models import PageProfile
 
-    pdf_profile = PdfProfile(
+    # 全部用 `.get(..., 默认值)`：旧 PDF 产物没有 `source_type`/`unit_count`，
+    # 升级后必须**零改动可读**。缺字段时的默认值就是旧的语义（PDF、0 个正文块）。
+    pdf_profile = SourceProfile(
         path=Path(profile_data["path"]),
         sha256=profile_data["sha256"],
-        page_count=profile_data["page_count"],
+        page_count=profile_data.get("page_count", 0),
         pages=[
             PageProfile(
                 page_no=p["page_no"],
@@ -469,31 +801,60 @@ def load_result(out_dir: Path, cfg: Config, domain: str) -> IngestResult:
                 native_dpi=p["native_dpi"],
                 reason=p["reason"],
             )
-            for p in profile_data["pages"]
+            for p in profile_data.get("pages", [])
         ],
-        kind=profile_data["kind"],
+        kind=profile_data.get("kind", "TEXT"),
         cross_engine=profile_data.get("cross_engine", {}),
+        source_type=profile_data.get("source_type", "pdf"),
+        unit_count=profile_data.get("unit_count", 0),
     )
 
     chunks: list[Chunk] = []
+    # 页图 / 引擎信息，用于把块的 bbox 归一化成分页比例坐标（见 _page_bbox_normalizer）。
+    img_by_page = {
+        int(im["page_no"]): im
+        for im in (manifest.get("render") or {}).get("images") or []
+        if im.get("page_no") is not None
+    }
+    prov_by_page = {p.page_no: (p.provider or "") for p in pages}
+    blk_by_id = {b.block_id: b for p in pages for b in p.blocks}
+    _norm = _page_bbox_normalizer(img_by_page, prov_by_page)
+
     with (out_dir / "chunks.jsonl").open(encoding="utf-8") as fh:
         for line in fh:
             if not line.strip():
                 continue
             d = json.loads(line)
+            block_ids = tuple(d.get("block_ids") or ())
+            # bboxes 是派生数据，不写进 chunks.jsonl（旧产物没有、也不需要重建）：
+            # 每次装载都从 ocr.json 的块 bbox 现算，保证旧产物也能直接获得页图高亮。
+            if d.get("bboxes"):
+                bboxes = tuple(BBox(**b) for b in d["bboxes"])
+            else:
+                bboxes = tuple(
+                    bb
+                    for bid in block_ids
+                    if (blk := blk_by_id.get(bid)) is not None
+                    if (bb := _norm(blk)) is not None
+                )
             chunks.append(
                 Chunk(
                     chunk_id=d["chunk_id"],
                     doc_id=d["doc_id"],
-                    page_no=d["page_no"],
+                    page_no=d.get("page_no"),
                     ordinal=d["ordinal"],
                     kind=d["kind"],
                     text=d["text"],
                     clause_path=tuple(d.get("clause_path") or ()),
                     clause_label=d.get("clause_label"),
                     table_id=d.get("table_id"),
-                    block_ids=tuple(d.get("block_ids") or ()),
+                    block_ids=block_ids,
                     char_len=d.get("char_len", len(d["text"])),
+                    locator_kind=d.get("locator_kind", "page"),
+                    section=d.get("section"),
+                    para_no=d.get("para_no"),
+                    para_end=d.get("para_end"),
+                    bboxes=bboxes,
                 )
             )
 
@@ -506,7 +867,11 @@ def load_result(out_dir: Path, cfg: Config, domain: str) -> IngestResult:
         chunks=chunks,
         index=index,
         manifest=manifest,
-        failed_pages=set(manifest.get("ocr", {}).get("pages_failed", [])),
+        # DOCX 的 `pages_failed` 恒为 []；过滤 None 是防旧产物/手写产物里
+        # 混进 null——那会让 `(doc_id, None)` 变成一个虚假的"失败页"。
+        failed_pages={
+            p for p in manifest.get("ocr", {}).get("pages_failed", []) if p is not None
+        },
     )
 
 
@@ -529,6 +894,8 @@ def load_results(
        BM25 的 IDF 依赖整个语料，分头算出来的分数不可比。
     3. **失败页**：升级成 `(doc_id, page_no)` 元组。
        两份文件的"第 3 页"是两回事，只比页码会让一份的失败页误伤另一份的证据。
+       **只有 PDF 会贡献失败页**：DOCX 没有页，它的空集不能被当成
+       "第 None 页失败"插进来。
 
     单份产物时行为与 `load_result` 完全一致。
     """
@@ -545,9 +912,26 @@ def load_results(
     failed: set[tuple[str, int]] = set()
     for r in results:
         chunks.extend(r.chunks)
-        failed |= {(r.doc_id, p) for p in r.failed_pages}
+        # DOCX 的 `failed_pages` 是空集；即便将来混进 None，也不该变成
+        # 一个"第 None 页失败"的幽灵证据（报告 P0-33 的同类问题）。
+        failed |= {
+            (r.doc_id, page) for page in r.failed_pages if page is not None
+        }
 
     merged_doc_id = "+".join(r.doc_id for r in results)
+    source_types = sorted({r.profile.source_type for r in results})
+    source: dict = {
+        # 混合语料必须显式叫 mixed：报其中任何一份的类型都是在说谎，
+        # 前端会据此按"PDF 第 N 页"渲染，而另一半根本没有页。
+        "source_type": source_types[0] if len(source_types) == 1 else "mixed",
+        "unit_count": sum(r.profile.unit_count for r in results),
+        "documents": len(results),
+    }
+    if source_types == ["pdf"]:
+        # 只有全 PDF 时页数才有意义；混合语料里把 PDF 的页数报成总数
+        # 会让人以为 DOCX 也有那么多页。
+        source["page_count"] = sum(r.profile.page_count for r in results)
+
     _log.info(
         "多文档装载完成",
         extra={
@@ -564,8 +948,12 @@ def load_results(
         index=HybridIndex(chunks, load_domain(domain, cfg)),
         manifest={
             "doc_id": merged_doc_id,
+            "source": source,
+            "source_types": source_types,
             "documents": [
                 {"doc_id": r.doc_id, "chunks": len(r.chunks),
+                 "source_type": r.profile.source_type,
+                 "unit_count": r.profile.unit_count,
                  "failed_pages": sorted(r.failed_pages)}
                 for r in results
             ],

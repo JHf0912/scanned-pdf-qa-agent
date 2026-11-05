@@ -27,6 +27,13 @@ out/
 # 届时 `git status` 会突然多出几万个文件。防护措施不该依赖被防护对象本身。
 .uvcache/
 
+# --- 前端源码依赖 ---
+# 构建产物（src/docqa/web/）入库，保证 `uv run docqa serve` 不需要 Node；
+# node_modules 与 Vite 缓存不入库。
+web/node_modules/
+web/.vite/
+web/*.tsbuildinfo
+
 # --- Python ---
 __pycache__/
 *.py[cod]
@@ -43,3 +50,7 @@ htmlcov/
 .idea/
 Thumbs.db
 desktop.ini
+# --- 账号库与初始密码（本地敏感，绝不入库） ---
+data/users.json
+data/users.json.tmp
+data/ADMIN_INITIAL_PASSWORD.txt

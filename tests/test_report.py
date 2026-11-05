@@ -71,6 +71,11 @@ class TestHtmlReport:
         report.notes.append("这是一条测试用的口径说明")
         assert "这是一条测试用的口径说明" in render_html_report(report)
 
+    def test_pdf_report_keeps_transcription_note(self, report):
+        """PDF 上这条说明是对的：索引层确实因为缺转写基准而没算。"""
+        report.notes.append("未提供 --transcription，索引层指标本次未计算。")
+        assert "--transcription" in render_html_report(report)
+
     def test_escapes_html_in_content(self, report):
         """答案里若含 HTML，必须转义——否则报告本身成了注入点。"""
         report.per_item[0]["answer"] = "<script>alert(1)</script>"
@@ -175,3 +180,88 @@ class TestParseSection:
         html = _render_grid(grid)
         assert 'colspan="3"' in html
         assert html.count("<th") == 1  # 合并后只有一个表头格，不是三个
+
+
+class TestDocxReport:
+    """DOCX 报告分支：没有页、没有 OCR，就不能按 PDF 的口径渲染。"""
+
+    @pytest.fixture
+    def docx_report(self):
+        from docqa.models import AnswerBundle, Citation, RetrievalHit
+
+        cite = Citation(
+            page_no=None, clause_label="3.6", chunk_id="d:b2", quote="",
+            para_no=4, locator_kind="paragraph", section="3.6",
+        )
+        bundle = AnswerBundle(
+            question="斜度公差是多少",
+            answer="按 AT8 级选取 [§3.6 ¶4]",
+            citations=[cite],
+            hits=[RetrievalHit(chunk_id="d:b2", score=1.0, arm="bm25_word", rank=1)],
+        )
+        item = GoldenItem(
+            qid="D1", question="斜度公差是多少", category="clause",
+            must_contain=["AT8"], citation_pages=[1],
+        )
+        return run_eval(
+            [item], lambda q: bundle, engine="docx", doc_id="d", domain="standard",
+            manifest={
+                "source": {"source_type": "docx", "unit_count": 12},
+                "docx": {
+                    "paragraphs": 12, "headings": 2, "tables": 1, "tables_linearized": 1,
+                    "numbering": {"literal": 1, "computed": 1, "missing": 0},
+                    "unsupported": {"footnotes": 2, "text_boxes": 0},
+                },
+            },
+        )
+
+    def test_parse_section_is_docx_not_pdf(self, docx_report):
+        html = render_html_report(docx_report)
+        assert "DOCX 解析结果" in html
+        assert "PDF 解析结果" not in html
+
+    def test_no_page_shaped_output(self, docx_report):
+        """不能出现页图、页数、识别失败页这类 PDF 口径。"""
+        html = render_html_report(docx_report)
+        assert "p.None" not in html
+        assert "识别失败页" not in html
+        assert "共 1 页" not in html
+        assert "第 1 页" not in html
+        assert "扫描版 PDF 问答系统" not in html
+
+    def test_structure_and_unsupported_are_shown(self, docx_report):
+        html = render_html_report(docx_report)
+        assert "非空正文块" in html or "正文块" in html
+        assert "线性化" in html
+        assert "脚注" in html
+
+    def test_ocr_layer_is_explicitly_na(self, docx_report):
+        """DOCX 没有 OCR 层：要写「不适用」，不能写「未提供人工转写基准」。"""
+        html = render_html_report(docx_report)
+        assert "不适用：DOCX 原生文本，无 OCR 层" in html
+        assert "未提供人工转写基准" not in html
+
+    def test_citations_use_locator_not_page(self, docx_report):
+        html = render_html_report(docx_report)
+        assert "引用出处" in html
+        assert "[§3.6 ¶4]" in html
+        assert "引用页码" not in html
+
+    def test_page_metric_is_na_and_question_still_passes(self, docx_report):
+        detail = docx_report.per_item[0]
+        assert detail["citation_page_ok"] is None
+        assert detail["passed"] is True
+
+    def test_pdf_only_notes_are_not_rendered(self, docx_report):
+        """CLI 会给 PDF 加"未提供 --transcription"的说明；DOCX 上它是假话。
+
+        断言只看**可见区域**：文末「原始结果」的 JSON dump 会如实保留 notes，
+        那是机器记录，不是给读者看的结论（同「题干必须出现在卡片区域」那条教训）。
+        """
+        docx_report.notes.append(
+            "未提供 --transcription，**索引层指标（CER / 表格单元格准确率）本次未计算**。"
+        )
+        html = render_html_report(docx_report)
+        visible = html.split("<h2>原始结果</h2>", 1)[0]
+        assert "--transcription" not in visible
+        assert "不适用：DOCX 原生文本，无 OCR 层" in visible

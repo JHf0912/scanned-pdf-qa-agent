@@ -28,28 +28,53 @@ from __future__ import annotations
 import time
 
 from ..config import Config, DomainProfile
+from ..errors import ConfigError
 from ..index import HybridIndex
-from ..llm import LLMProvider
+from ..llm import LLMProvider, NullProvider
 from ..logging import get_logger
 from ..models import (
     AnswerBundle,
+    AnswerMode,
     Citation,
     RefusalReason,
     TraceStep,
     Usage,
     VerificationReport,
 )
-from .answer import Draft, draft_answer
+from .answer import (
+    FREE_REQUIRES_LLM_MESSAGE,
+    FREE_SYSTEM_PROMPT,
+    HYBRID_KNOWLEDGE_MARKER,
+    HYBRID_REQUIRES_LLM_MESSAGE,
+    Draft,
+    draft_answer,
+    validate_answer_mode,
+)
 from .policy import (
+    Decision,
     decide,
     detect_ambiguity,
     evidence_coverage,
     is_existence_question,
+    is_generic_negative,
     is_in_document_negative,
 )
-from .verify import verify
+from .verify import check_extraction_health, verify
 
 _log = get_logger("qa.agent")
+
+
+def _format_failed_pages(failed_pages: set[tuple[str, int]]) -> str:
+    """把失败页集合格式化成可读文案；多文档时带 doc_id（P2-6）。
+
+    「A 第 1 页」能让用户知道该重扫哪份文件；只写「[1]」在多文档场景下
+    会把 A 文档的失败页误报成当前问题所属文档。
+    """
+    parts = [
+        f"{doc} 第 {page} 页" if doc else f"第 {page} 页"
+        for doc, page in sorted(failed_pages)
+    ]
+    return "、".join(parts)
 
 
 class QaAgent:
@@ -86,7 +111,65 @@ class QaAgent:
 
     # ---------------------------------------------------------------- 主流程
 
-    def answer(self, question: str) -> AnswerBundle:
+    def answer(self, question: str, mode: AnswerMode = "strict") -> AnswerBundle:
+        validate_answer_mode(mode)
+
+        # --- free（自由回答）：不检索 / 不引用 / 不拒答 ----------------------
+        #
+        # free 是**完全脱离文档**的一条显式路径：不进入检索→起草→自检→修复
+        # 的主循环，直接由生成模型自由作答。它没有任何证据依据，所以 citations
+        # 恒为空、refused 恒为 False、verification 为空报告——不假装做过文档自检。
+        #
+        # 没有生成模型时它无从谈起（抽取式回答字面上就是证据，不是"自由作答"），
+        # 与 hybrid 一样明确报配置错误，**绝不静默降级**。
+        if mode == "free":
+            if self.provider.name == "null" or isinstance(self.provider, NullProvider):
+                raise ConfigError(FREE_REQUIRES_LLM_MESSAGE)
+            qa_cfg = self.profile.qa
+            started = time.perf_counter()
+            resp = self.provider.complete(
+                FREE_SYSTEM_PROMPT,
+                question,
+                max_tokens=qa_cfg.max_tokens,
+                temperature=qa_cfg.temperature,
+            )
+            bundle = AnswerBundle(
+                question=question,
+                answer=resp.text.strip(),
+                citations=[],
+                refused=False,
+                verification=VerificationReport(),
+                hits=[],
+                trace=[
+                    TraceStep(
+                        step="free",
+                        detail="自由回答：不检索/不引用/不拒答",
+                        usage=resp.usage,
+                    )
+                ],
+                usage=resp.usage,
+                attempts=1,
+                answer_mode="free",
+                citation_template=self.profile.citation_template,
+                docx_citation_template=self.profile.docx_citation_template,
+            )
+            _log.info(
+                "自由问答完成",
+                extra={
+                    "elapsed_ms": int((time.perf_counter() - started) * 1000),
+                    "detail": f"mode=free answer_chars={len(bundle.answer or '')}",
+                    "usage": resp.usage.to_dict(),
+                },
+            )
+            return bundle
+
+        # hybrid 必须真的由生成模型作答。没有模型时明确报错，
+        # **绝不静默降级成 strict**——那会让前端显示的模式与实际行为错位。
+        if mode == "hybrid" and (
+            self.provider.name == "null" or isinstance(self.provider, NullProvider)
+        ):
+            raise ConfigError(HYBRID_REQUIRES_LLM_MESSAGE)
+
         started = time.perf_counter()
         trace: list[TraceStep] = []
         usage = Usage()
@@ -132,6 +215,71 @@ class QaAgent:
 
             coverage = evidence_coverage(question, evidence)
 
+            # --- SEC-HYB-01 / NEW-6：失败页前置拒答 ---
+            #
+            # 失败页通常**没有可召回的文本**（OCR 失败/未入库），所以
+            # `decide()` 的“证据触及失败页”检查看不到它；而 hybrid 又跳过
+            # 无证据/覆盖率步骤。若不在这里拦，系统会把“检索不到”解释成
+            # “文档没规定”，再用模型知识补位——那正是可追溯性的底线。
+            #
+            # 第二种情况：证据充足、但证据本身落在失败页上。它在 `decide()`
+            # 里注定会拒答，提前拦下可以省掉一次无意义的模型调用（NEW-6）。
+            # 证据充足且不涉及失败页时正常回答。
+            if mode == "hybrid" and self.failed_pages:
+                if not evidence or coverage < qa_cfg.min_coverage:
+                    failed_refs = _format_failed_pages(self.failed_pages)
+                    trace.append(
+                        TraceStep(
+                            step="precheck",
+                            detail=(
+                                f"文档存在未成功识别的页面（{failed_refs}），"
+                                f"且证据不足（{len(evidence)} 个片段，"
+                                f"覆盖率 {coverage:.0%}），未调用模型即拒答"
+                            ),
+                        )
+                    )
+                    decision = Decision(
+                        refused=True,
+                        reason=RefusalReason.EXTRACTION_FAILED,
+                        detail=(
+                            f"文档存在未成功识别的页面（{failed_refs}），"
+                            "本次检索没有取得足够的可引用证据。"
+                            "这不是「文档里没有」，而是「这些页没读出来」——"
+                            "不能用模型知识替代。请重新识别失败页"
+                            "（或提供更清晰的扫描件）后再问。"
+                        ),
+                    )
+                    return self._finalize(
+                        question, None, [], decision, report, hits, trace,
+                        usage, attempts, started, mode=mode,
+                    )
+
+                health = check_extraction_health(evidence, self.failed_pages)
+                if not health.passed:
+                    offenders = "、".join(health.offenders)
+                    trace.append(
+                        TraceStep(
+                            step="precheck",
+                            detail=(
+                                f"证据涉及未成功识别的页面：{offenders}，"
+                                "未调用模型即拒答"
+                            ),
+                        )
+                    )
+                    decision = Decision(
+                        refused=True,
+                        reason=RefusalReason.EXTRACTION_FAILED,
+                        detail=(
+                            f"证据涉及未成功识别的页面：{offenders}。"
+                            "不能用模型知识替代；请重新识别这些页面"
+                            "（或提供更清晰的扫描件）后再问。"
+                        ),
+                    )
+                    return self._finalize(
+                        question, None, [], decision, report, hits, trace,
+                        usage, attempts, started, mode=mode,
+                    )
+
             # --- 生成之前的两次预判，避免白花一次模型调用 ---
             #
             # 这两项都只依赖检索结果，不需要调用模型。放在生成前，是因为
@@ -159,17 +307,21 @@ class QaAgent:
                     candidates=candidates,
                     coverage=coverage,
                     existence_question=is_existence_question(question),
+                    answer_mode=mode,
                 )
                 return self._finalize(
                     question, None, [], decision, report, hits, trace,
-                    usage, attempts, started,
+                    usage, attempts, started, mode=mode,
                 )
 
             # 覆盖率过低 = 文档根本没覆盖这个问题，直接拒答。
-            # 例外：「是否规定 X」型问句不走这条路——它们的正确答案常常就是
+            # 例外一：「是否规定 X」型问句不走这条路——它们的正确答案常常就是
             # 「未规定」，属于有效答案而非答不了，必须交给生成侧处理。
+            # 例外二：hybrid 模式——文档没覆盖正是模型知识要补的那部分，
+            # 覆盖率预判在此不成立（拿统计判据拦一个"允许超出文档"的模式）。
             if (
-                attempt == 1
+                mode == "strict"
+                and attempt == 1
                 and coverage < qa_cfg.min_coverage
                 and not is_existence_question(question)
             ):
@@ -183,6 +335,7 @@ class QaAgent:
                     failed_pages=self.failed_pages,
                     candidates=[],
                     coverage=coverage,
+                    answer_mode=mode,
                 )
                 if decision.refused:
                     trace.append(
@@ -193,7 +346,7 @@ class QaAgent:
                     )
                     return self._finalize(
                         question, None, [], decision, report, hits, trace,
-                        usage, attempts, started,
+                        usage, attempts, started, mode=mode,
                     )
 
             # --- 起草 ---
@@ -206,18 +359,31 @@ class QaAgent:
                 temperature=qa_cfg.temperature,
                 max_tokens=qa_cfg.max_tokens,
                 repair_hint=repair_hint,
-                # 引用模板来自场景配置。它此前从未被读取（格式写死在 Citation.render），
-                # 于是"五个场景各配一份引用模板"这件事一直是空转的。
+                # 引用模板来自场景配置。此前这个配置项从未被读取（格式写死在
+                # Citation.render），于是"五个场景各配一份引用模板"一直是空转的。
+                # PDF 与 DOCX 各一套：chunk 的 locator_kind 决定用哪一套。
                 citation_template=self.profile.citation_template,
+                docx_citation_template=self.profile.docx_citation_template,
+                mode=mode,
             )
             usage = usage + draft.usage
+            draft_detail = (
+                f"第 {attempt} 轮：{'抽取式' if draft.extractive else '模型生成'}"
+            )
+            if mode == "hybrid":
+                draft_detail += "（hybrid）"
+            draft_detail += f"，{len(draft.text)} 字，{len(draft.citations)} 条引用"
+            if mode == "hybrid":
+                # strict 轨迹保持原样；hybrid 额外记录模式与补充段长度，
+                # 便于复盘"模型知识有没有真的出现"。
+                draft_detail += (
+                    f"，模型知识补充 {len(draft.model_knowledge)} 字"
+                    if draft.knowledge_used else "，未使用模型知识"
+                )
             trace.append(
                 TraceStep(
                     step="draft",
-                    detail=(
-                        f"第 {attempt} 轮：{'抽取式' if draft.extractive else '模型生成'}"
-                        f"，{len(draft.text)} 字，{len(draft.citations)} 条引用"
-                    ),
+                    detail=draft_detail,
                     ms=int((time.perf_counter() - t0) * 1000),
                     usage=draft.usage,
                 )
@@ -225,6 +391,15 @@ class QaAgent:
 
             # --- 自检 ---
             evidence_map = {c.chunk_id: c.text for c in evidence}
+            # 零引用放行只有两种情况（本轮再次收紧）：
+            # 1) 正文为空，且**确实有补充段**（两者都空不是成功，走拒答）；
+            # 2) 正文只由**通用否定短句**组成（精确白名单模板，
+            #    不是“含否定词”的启发式；具体否定必须引用证据或改写）。
+            # 有肯定内容的正文零引用仍按“无出处”拦截。
+            allow_zero_citations = mode == "hybrid" and (
+                (not draft.text.strip() and draft.knowledge_used)
+                or is_generic_negative(draft.text)
+            )
             report = verify(
                 draft.text,
                 draft.citations,
@@ -235,14 +410,22 @@ class QaAgent:
                 # 传入全文档的条号集合：条号与表格数值形态相同（都是 3.6 / 2.5），
                 # 不给这份名单，检查会把每个小数都当成条号声明。
                 known_clause_labels=self._known_clause_labels,
+                answer_mode=mode,
+                model_knowledge=draft.model_knowledge,
+                knowledge_used=draft.knowledge_used,
+                knowledge_citations_stripped=draft.knowledge_citations_stripped,
+                allow_zero_citations=allow_zero_citations,
             )
+            verify_detail = (
+                f"第 {attempt} 轮：{'全部通过' if report.gates_passed else '未通过 ' + '、'.join(c.name for c in report.failed_gates)}"
+                f"（支撑度 {report.support_score:.2f}）"
+            )
+            if mode == "hybrid":
+                verify_detail += "，模式 hybrid"
             trace.append(
                 TraceStep(
                     step="verify",
-                    detail=(
-                        f"第 {attempt} 轮：{'全部通过' if report.gates_passed else '未通过 ' + '、'.join(c.name for c in report.failed_gates)}"
-                        f"（支撑度 {report.support_score:.2f}）"
-                    ),
+                    detail=verify_detail,
                 )
             )
 
@@ -258,14 +441,15 @@ class QaAgent:
                     candidates=[],
                     coverage=coverage,
                     existence_question=is_existence_question(question),
+                    answer_mode=mode,
                 )
                 return self._finalize(
                     question, draft, draft.citations, decision, report, hits,
-                    trace, usage, attempts, started,
+                    trace, usage, attempts, started, mode=mode,
                 )
 
             # --- 修复 ---
-            repair_hint = self._make_repair_hint(report, draft, evidence)
+            repair_hint = self._make_repair_hint(report, draft, evidence, mode=mode)
             if report and any(c.name == "numeric_grounding" for c in report.failed_gates):
                 # 数值落地失败通常意味着"证据给少了"，扩大召回往往比让模型重写更有效
                 current_k = min(current_k + 3, current_k * 2)
@@ -294,6 +478,7 @@ class QaAgent:
             candidates=[],
             coverage=evidence_coverage(question, evidence),
             existence_question=is_existence_question(question),
+            answer_mode=mode,
         )
         trace.append(
             TraceStep(
@@ -303,16 +488,21 @@ class QaAgent:
         )
         return self._finalize(
             question, draft, draft.citations if draft else [], decision, report,
-            hits, trace, usage, attempts, started,
+            hits, trace, usage, attempts, started, mode=mode,
         )
 
     # ---------------------------------------------------------------- 内部
 
-    def _make_repair_hint(self, report, draft: Draft, evidence: list) -> str:
+    def _make_repair_hint(
+        self, report, draft: Draft, evidence: list, mode: AnswerMode = "strict"
+    ) -> str:
         """把自检失败翻译成给生成侧的修正指令。
 
         关键：要**具体**。"答案不准确"这种提示没有用；
         "数值 1.5 在证据中不存在，请只使用证据中出现的数值"才可执行。
+
+        hybrid 多一条硬约束：正文与模型知识必须分开，补充段不得引用。
+        修复只针对 doc_text——补充段不参与自检，也就不应进入修复目标。
         """
         parts: list[str] = []
         for check in report.failed_gates:
@@ -335,8 +525,33 @@ class QaAgent:
                 )
             elif check.name == "sentence_support":
                 parts.append("部分结论在证据中找不到对应文字，请只依据证据作答。")
+            elif check.name == "doc_sentence_support" and mode == "hybrid":
+                parts.append(
+                    "文档正文的断言在所引证据中找不到逐字支撑；"
+                    "请改为逐字引用证据原句/原词（可省略或拼接，但不得改写、"
+                    "不得插入解释或推断）；仍无支撑的内容请移到"
+                    f"{HYBRID_KNOWLEDGE_MARKER}段。"
+                    "若文档确实没有规定，正文只写通用否定短句"
+                    "（如「文档中未规定。」），具体说明放补充段。"
+                )
         if not draft.citations:
-            parts.append("你的回答没有任何引用，请为每一句结论补充 [p.页码 §条款号] 形式的引用。")
+            parts.append(
+                "你的回答没有任何引用，请为每一句结论补充引用，"
+                "格式必须与证据头括号内的定位格式一致"
+                "（PDF 形如 [p.3 §3.6]，DOCX 形如 [§3.6 ¶4]）。"
+            )
+        if mode == "hybrid":
+            parts.append(
+                "正文与模型知识必须分开：文档能支持的内容放在正文并逐句引用；"
+                f"文档没有的内容放在末尾 {HYBRID_KNOWLEDGE_MARKER} 之后，"
+                "补充段不得包含任何引用标记（不得写 [p.N]/[§...]/[¶...]），"
+                "也不得声称文档中写了。"
+            )
+            if draft.knowledge_citations_stripped:
+                parts.append(
+                    f"上一次的补充段含 {draft.knowledge_citations_stripped} 个引用标记，"
+                    "已剥离；补充段一律不能引用。"
+                )
         return " ".join(parts) or "请重新作答，确保每句结论都有证据支撑。"
 
     def _finalize(
@@ -351,6 +566,7 @@ class QaAgent:
         usage: Usage,
         attempts: int,
         started: float,
+        mode: AnswerMode = "strict",
     ) -> AnswerBundle:
         text = draft.text if draft else None
 
@@ -369,6 +585,13 @@ class QaAgent:
                 )
                 decision = type(decision)(refused=False)
 
+        # 拒答时不返回模型知识：补充段不能替代被拒的答案。
+        knowledge = None
+        knowledge_used = False
+        if not decision.refused and mode == "hybrid" and draft is not None:
+            knowledge = draft.model_knowledge
+            knowledge_used = draft.knowledge_used
+
         bundle = AnswerBundle(
             question=question,
             answer=None if decision.refused else text,
@@ -383,6 +606,10 @@ class QaAgent:
             usage=usage,
             attempts=attempts,
             citation_template=self.profile.citation_template,
+            docx_citation_template=self.profile.docx_citation_template,
+            answer_mode=mode,
+            model_knowledge=knowledge,
+            knowledge_used=knowledge_used,
         )
         _log.info(
             "问答完成",

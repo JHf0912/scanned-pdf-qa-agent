@@ -30,8 +30,13 @@ from pathlib import Path
 
 import pytest
 
+import docqa.api.app as _api_app
 from docqa.config import DOTENV_DISABLE_ENV, DomainProfile, load_config, load_domain
 from docqa.models import Chunk, Citation, OcrBlock, OcrPage, Usage
+
+# 鉴权默认开启。除 test_auth 外的历史用例通过该模块开关按管理员放行（免去逐个登录）。
+# 在导入时即刻生效，早于任何 fixture —— 因此 class 级 fixture 建的 app 也能命中。
+_api_app.AUTH_DISABLED = True
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 

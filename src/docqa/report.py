@@ -99,6 +99,50 @@ def _metric_card(label: str, value: str, note: str = "") -> str:
     return f'<div class="card"><div class="k">{_esc(label)}</div><div class="v">{_esc(value)}</div>{n}</div>'
 
 
+# ---------------------------------------------------------------- DOCX 分支
+#
+# 报告是**来源相关**的：PDF 有页、有页图、有 OCR 层；DOCX 三者都没有。
+# 用同一套模板硬渲染会产出"共 0 页""识别失败 0 页""p.None"这类假话，
+# 而假话比缺项更糟——读者会以为某项被度量过。所以每个受影响的小节都按
+# `rep.source_type` 分支，而不是在 PDF 口径上打补丁。
+
+
+def _is_docx(rep: "EvalReport") -> bool:
+    return getattr(rep, "source_type", "pdf") == "docx"
+
+
+def _docx_meta(rep: "EvalReport") -> dict:
+    meta = getattr(rep, "docx", None)
+    return meta if isinstance(meta, dict) else {}
+
+
+def _docx_unit_count(rep: "EvalReport") -> int:
+    """非空正文块数：优先进 manifest 的 `docx`，再退到 `source`。"""
+    meta = _docx_meta(rep)
+    manifest = getattr(rep, "manifest", None) or {}
+    source = manifest.get("source") if isinstance(manifest.get("source"), dict) else {}
+    for candidate in (meta.get("unit_count"), source.get("unit_count")):
+        try:
+            value = int(candidate)
+        except (TypeError, ValueError):
+            continue
+        if value:
+            return value
+    return 0
+
+
+# CLI 会给每轮评估注入「未提供 --transcription」的说明。`--transcription`
+# 是 OCR 索引层的基准文件，DOCX 没有识别层，这条说明在 DOCX 报告里是假话：
+# 留着会把读者引向一个错误的动作（去找转写文件）。所以报告层不渲染它，
+# 由上面的 N/A 小节解释"为什么这一层不适用"。
+PDF_ONLY_NOTE_MARKERS = ("--transcription", "人工转写基准")
+
+
+def _is_pdf_only_note(note: str) -> bool:
+    text = note or ""
+    return any(marker in text for marker in PDF_ONLY_NOTE_MARKERS)
+
+
 def _render_grid(grid) -> str:
     """把一个 TableGrid 渲染成**真的 HTML 表格**（保留合并单元格）。
 
@@ -216,6 +260,18 @@ def _render_index_layer(rep: "EvalReport") -> str:
     所以这一层先报：它决定了后面那些数字有多少可信度。
     """
     ocr = getattr(rep, "ocr", None) or {}
+    if _is_docx(rep):
+        # DOCX 没有识别环节：这不是"没量"，是**不适用**。
+        # 写成"未提供人工转写基准"会把读者引向一个错误的动作（去找转写文件）。
+        return (
+            "<h2>① 索引层（上下文可信度）</h2>"
+            '<div class="warnbox"><b>不适用：DOCX 原生文本，无 OCR 层。</b><br>'
+            "索引层衡量的是「识别」——字符准确率 (1−CER)、表格单元格准确率、"
+            "数值字段召回。DOCX 的文字直接取自文档 XML，不存在识别环节，"
+            "因此这一层<b>不适用</b>，而不是「识别全错」。<br>"
+            "DOCX 的对应保障是<b>段落覆盖率</b>与<b>引用回环</b>，"
+            "由 <code>docqa eval-docx</code> 度量。</div>"
+        )
     if not ocr or not ocr.get("pages_evaluated"):
         return (
             "<h2>① 索引层（上下文可信度）</h2>"
@@ -295,6 +351,8 @@ def _render_parse_section(rep: "EvalReport") -> str:
     却看不到**究竟从 PDF 里读出了什么**，而后者才是这份交付的核心。
     """
     pages = getattr(rep, "pages", None) or []
+    if _is_docx(rep):
+        return _render_docx_parse_section(rep)
     if not pages:
         return (
             "<h2>PDF 解析结果</h2>"
@@ -378,6 +436,86 @@ def _render_parse_section(rep: "EvalReport") -> str:
     return "".join(out)
 
 
+def _render_docx_parse_section(rep: "EvalReport") -> str:
+    """「DOCX 解析结果」小节：正文块 / 标题 / 表格 / 未支持构造。
+
+    这里**不出现页图、页数、识别失败页**：DOCX 没有这些概念，
+    渲染它们只会让读者以为有一页一页的识别过程。
+    """
+    docx = _docx_meta(rep)
+    unit_count = _docx_unit_count(rep)
+    out: list[str] = ["<h2>DOCX 解析结果</h2>"]
+    if not docx and not unit_count:
+        out.append(
+            '<div class="warnbox">本次运行未附带 DOCX 解析统计'
+            "（例如从缓存重建的报告），因此无法展示结构统计。"
+            "请重跑 <code>docqa eval</code> 或 <code>docqa eval-docx</code> "
+            "以生成完整报告。</div>"
+        )
+        return "".join(out)
+
+    numbering = docx.get("numbering") if isinstance(docx.get("numbering"), dict) else {}
+    unsupported = docx.get("unsupported") if isinstance(docx.get("unsupported"), dict) else {}
+    headings = docx.get("headings", 0)
+    tables = docx.get("tables", 0)
+    linearized = docx.get("tables_linearized", 0)
+
+    out.append(
+        '<p class="meta">来源 <code>DOCX</code>（原生文本，无页、无 OCR 层）'
+        f"　非空正文块 {unit_count} 块　标题 {headings} 个　表格 {tables} 张</p>"
+    )
+    out.append('<div class="cards">')
+    out.append(_metric_card("非空正文块", str(unit_count), "¶n 的定义域"))
+    out.append(_metric_card("标题", str(headings)))
+    out.append(_metric_card("表格", str(tables)))
+    out.append(_metric_card("表格已线性化", str(linearized),
+                            "Phase 1：只保数值，不建网格"))
+    out.append("</div>")
+
+    out.append("<h3>表格</h3>")
+    if tables:
+        out.append(
+            "<p class='sub'>表格在 Phase 1 <b>线性化</b>：单元格按 "
+            "<code>行 | 格 | 格</code> 拼成一行文本，保住数值不丢；"
+            "<b>合并单元格网格（<code>gridSpan</code>/<code>vMerge</code>）与"
+            "单元格级引用不在范围内</b>（<code>structure_parsed=false</code>）。</p>"
+        )
+    else:
+        out.append("<p class='sub'>本文档没有表格。</p>")
+
+    out.append("<h3>自动编号</h3>")
+    out.append(
+        "<table><tr><th>字面编号</th><th>自动编号已解析</th><th>无法解析</th>"
+        "<th>不支持的格式</th></tr>"
+        f"<tr><td class='num'>{numbering.get('literal', 0)}</td>"
+        f"<td class='num'>{numbering.get('computed', 0)}</td>"
+        f"<td class='num'>{numbering.get('missing', 0)}</td>"
+        f"<td>{_esc('、'.join(numbering.get('unsupported_formats') or []) or '无')}</td></tr>"
+        "</table>"
+    )
+    if numbering.get("missing"):
+        out.append(
+            f'<div class="warnbox">有 {numbering["missing"]} 处自动编号无法解析：'
+            "这些标题/段落退化为段落号引用（<code>[¶n]</code>）。"
+            "按契约只提示、不设门禁。</div>"
+        )
+
+    out.append("<h3>未支持构造（计数上报）</h3>")
+    if unsupported:
+        rows = "".join(
+            f"<tr><td><code>{_esc(key)}</code></td><td class='num'>{_esc(value)}</td></tr>"
+            for key, value in sorted(unsupported.items())
+        )
+        out.append("<table><tr><th>构造</th><th>数量</th></tr>" + rows + "</table>")
+    else:
+        out.append('<p class="sub">产物未提供 <code>unsupported</code> 统计。</p>')
+    out.append(
+        "<p class='sub'>Phase 1 不抽取：脚注/尾注、文本框/形状、公式结构、批注、"
+        "页眉页脚、图片 OCR。它们<b>如实计数上报</b>，绝不静默丢弃。</p>"
+    )
+    return "".join(out)
+
+
 def render_html_report(rep: "EvalReport") -> str:
     """把 EvalReport 渲染成自包含的 HTML。"""
     m = rep.metrics
@@ -389,6 +527,7 @@ def render_html_report(rep: "EvalReport") -> str:
             return ""
         return f"95% CI [{_pct(v[0])}, {_pct(v[1])}]"
 
+    is_docx = _is_docx(rep)
     parts: list[str] = []
     parts.append(f"""<!DOCTYPE html>
 <html lang="zh-CN"><head><meta charset="utf-8">
@@ -396,10 +535,25 @@ def render_html_report(rep: "EvalReport") -> str:
 <title>docqa 评估报告 · {_esc(rep.doc_id)}</title>
 <style>{_CSS}</style></head><body><div class="wrap">""")
 
-    parts.append(f"""<h1>扫描版 PDF 问答系统 · 评估报告</h1>
-<p class="sub">文档 <b>{_esc(rep.doc_id)}</b> ｜ 场景 <code>{_esc(rep.domain)}</code>
- ｜ OCR 引擎 <code>{_esc(rep.engine)}</code></p>
-<p class="meta">耗时 {rep.elapsed_s}s ｜ 共 {m.get('items', 0)} 题</p>""")
+    if is_docx:
+        title = "DOCX 原生文档问答系统 · 评估报告"
+        sub = (
+            f"<p class=\"sub\">文档 <b>{_esc(rep.doc_id)}</b>"
+            f" ｜ 场景 <code>{_esc(rep.domain)}</code>"
+            " ｜ 来源 <code>DOCX</code>（原生文本，无 OCR 层）</p>"
+            f"<p class=\"meta\">耗时 {rep.elapsed_s}s ｜ 共 {m.get('items', 0)} 题"
+            f" ｜ 非空正文块 {_docx_unit_count(rep)}</p>"
+        )
+    else:
+        title = "扫描版 PDF 问答系统 · 评估报告"
+        sub = (
+            f"<p class=\"sub\">文档 <b>{_esc(rep.doc_id)}</b>"
+            f" ｜ 场景 <code>{_esc(rep.domain)}</code>"
+            f" ｜ OCR 引擎 <code>{_esc(rep.engine)}</code></p>"
+            f"<p class=\"meta\">耗时 {rep.elapsed_s}s ｜ 共 {m.get('items', 0)} 题</p>"
+        )
+    parts.append(f"<h1>{title}</h1>")
+    parts.append(sub)
 
     # --- 核心指标 ---
     parts.append('<div class="cards">')
@@ -432,6 +586,8 @@ def render_html_report(rep: "EvalReport") -> str:
     )
 
     for note in rep.notes:
+        if is_docx and _is_pdf_only_note(note):
+            continue
         parts.append(f'<div class="warnbox">{_esc(note)}</div>')
 
     # 索引层排在 PDF 解析结果之前：它决定了后面所有数字的可信度
@@ -538,9 +694,16 @@ def render_html_report(rep: "EvalReport") -> str:
                 extra += ("　（拒答正确）" if d.get("refusal_correct") else "　（拒答错误）")
             extra += "</div>"
 
-        cites = ""
-        for c in d.get("citation_pages", []) or []:
-            cites += f"<code>p.{_esc(c)}</code> "
+        # 引用区按**来源**分支：PDF 报页码，DOCX 报出处。
+        # 绝不能出现 `p.None`——它看起来像引用，实际不可定位。
+        if is_docx:
+            locators = [loc for loc in (d.get("citation_locators") or []) if loc]
+            cites = "".join(f"<code>{_esc(loc)}</code> " for loc in locators)
+            cites_label = "引用出处"
+        else:
+            pages = [p for p in (d.get("citation_pages") or []) if p is not None]
+            cites = "".join(f"<code>p.{_esc(p)}</code> " for p in pages)
+            cites_label = "引用页码"
 
         checks = ""
         for name, okc in (d.get("checks") or {}).items():
@@ -553,7 +716,7 @@ def render_html_report(rep: "EvalReport") -> str:
 <span class="tag">{_esc(d.get('category',''))} · {badge.upper()} · 尝试 {d.get('attempts',1)} 轮</span></div>
 <div class="ans {'refused' if d.get('refused') else ''}">{_esc(d.get('answer','')) or '<i>（无答案）</i>'}</div>
 {extra}
-<div class="cites">引用页码：{cites or '<i>无</i>'}　支撑度 {d.get('support_score', 0):.2f}
+<div class="cites">{cites_label}：{cites or '<i>无</i>'}　支撑度 {d.get('support_score', 0):.2f}
 　上下文利用率 {_pct(d.get('context_utilization', 0))}</div>
 <div class="checks">{checks}</div>
 <div class="trace">轨迹：{' → '.join(d.get('trace_steps', []))}</div>
@@ -564,9 +727,17 @@ def render_html_report(rep: "EvalReport") -> str:
                  + _esc(json.dumps(rep.to_dict(), ensure_ascii=False, indent=2)[:20000])
                  + "</pre></details>")
 
-    parts.append("""<footer>
-由 <code>docqa eval</code> 生成。所有指标均为确定性实现，不依赖评委模型；
-每个比例附 Wilson 95% 置信区间与样本量。
-</footer></div></body></html>""")
+    if is_docx:
+        footer = (
+            "由 <code>docqa eval-docx</code> 与 <code>docqa eval</code> 生成。"
+            "DOCX 没有 OCR 层：页码 / 页图 / CER 类指标不适用，"
+            "对应保障是段落覆盖率与引用回环。所有指标均为确定性实现，不依赖评委模型。"
+        )
+    else:
+        footer = (
+            "由 <code>docqa eval</code> 生成。所有指标均为确定性实现，不依赖评委模型；"
+            "每个比例附 Wilson 95% 置信区间与样本量。"
+        )
+    parts.append(f"<footer>\n{footer}\n</footer></div></body></html>")
 
     return "".join(parts)

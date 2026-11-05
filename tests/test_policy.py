@@ -189,3 +189,33 @@ class TestScoreMargin:
     def test_config_default_is_off(self):
         """默认必须是关闭的：本语料只有 16 个片段，阈值未标定。"""
         assert load_config().qa.min_score_margin == 0.0
+
+
+class TestDocxLocatorFallback:
+    """DOCX 没有页：歧义候选的解释与引用必须按 `§... ¶...` 显示。
+
+    **回归**：回退文案原先写死 `第 {page_no} 页`，DOCX 会显示「第 None 页」，
+    而引用的 `render()` 会产出 `[p.None]`——一个看起来像引用、
+    实际无法定位的字符串。
+    """
+
+    def mk_docx(self, cid: str, text: str, label: str, para: int) -> Chunk:
+        return Chunk(
+            chunk_id=cid, doc_id="d", page_no=None, ordinal=para, kind="clause",
+            text=text, clause_path=(), clause_label=label,
+            locator_kind="paragraph", section=label, para_no=para, para_end=para,
+        )
+
+    def test_interpretation_falls_back_to_section_and_para(self):
+        hits = [
+            (self.mk_docx("c1", "报送截止时间为 9 月 10 日。", "3.1", 3), 1.0),
+            (self.mk_docx("c2", "报送截止时间为 9 月 20 日。", "3.2", 7), 0.98),
+        ]
+        got = detect_ambiguity("报送截止时间是什么时候", hits)
+        assert len(got) == 2
+        assert {c.interpretation for c in got} == {"§3.1 ¶3", "§3.2 ¶7"}
+        for opt in got:
+            assert opt.citation.locator_kind == "paragraph"
+            assert opt.citation.page_no is None
+            assert opt.citation.evidence_chunk_ids == (opt.citation.chunk_id,)
+            assert "None" not in opt.citation.render()
